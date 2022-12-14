@@ -10,7 +10,7 @@ executable app
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   ghcjs-options:
     -dedupe
-  build-depends:       base, miso, aeson, time, containers
+  build-depends:       base, miso, aeson, time, containers, random, mtl, transformers
   if !impl(ghcjs)
     build-depends:
        jsaddle, jsaddle-warp, transformers, warp, websockets

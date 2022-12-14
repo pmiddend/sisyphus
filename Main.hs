@@ -4,19 +4,22 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
 
+import Control.Monad.State.Strict (MonadState, State, evalState, get, put)
 import Data.Aeson
 import Data.List (find, maximumBy, sortBy)
 import qualified Data.Map as M
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Ord (Down (..), comparing)
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
 import Miso
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
+import System.Random (Random, RandomGen, StdGen, mkStdGen, randomR)
 import Prelude hiding (all)
 #ifndef __GHCJS__
 import           Language.Javascript.JSaddle.Warp as JSaddle
@@ -59,6 +62,9 @@ instance Show Importance where
     1 -> "Wichtig"
     2 -> "Superwichtig"
     _ -> "Wichtigkeit(" <> show x <> ")"
+
+importanceNumeric :: Importance -> Int
+importanceNumeric (Importance x) = x
 
 instance FromJSON Importance where
   parseJSON = withScientific "Importance" (pure . Importance . floor)
@@ -182,8 +188,8 @@ initialModel =
 modelToLocalStorage :: Model -> LocalStorageModel
 modelToLocalStorage (Model {tasks = tasks, selectedTasks}) = LocalStorageModel tasks selectedTasks
 
-appendStatus :: Model -> MisoString -> Effect Action Model
-appendStatus m message = noEff (m {statusMessages = message : statusMessages m})
+-- appendStatus :: Model -> MisoString -> Effect Action Model
+-- appendStatus m message = noEff (m {statusMessages = message : statusMessages m})
 
 setLocalStorageFromModel :: Model -> JSM Action
 setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
@@ -221,7 +227,7 @@ updateModel (ToggleSelected tid) m =
           else tid : selectedTasks m
       newModel = m {selectedTasks = newSelected}
    in newModel <# setLocalStorageFromModel newModel
-updateModel LocalStorageUpdated m = appendStatus m "local storage set"
+updateModel LocalStorageUpdated m = noEff m
 updateModel (NewTaskChanged nt) m = noEff (m {newTask = nt})
 updateModel (ToggleDone tid) m =
   noEff $
@@ -275,7 +281,7 @@ viewNewTaskForm m =
 weekdayToAllocationTime :: Weekday -> TimeEstimate
 weekdayToAllocationTime Saturday = TimeEstimate 180
 weekdayToAllocationTime Sunday = TimeEstimate 180
-weekdayToAllocationTime _ = TimeEstimate 80
+weekdayToAllocationTime _ = TimeEstimate 120
 
 estimateInMinutes :: TimeEstimate -> Int
 estimateInMinutes (TimeEstimate e) = e
@@ -389,55 +395,100 @@ viewTasks selectedIds all =
                       th_ [] [text "Title"],
                       th_ [] [text "Deadline"],
                       th_ [] [text "Importance"],
-                      th_ [] [text "Time Estimate"]
+                      th_ [] [text "Estimate"]
                     ]
                 ],
               tbody_ [] (viewTaskLine <$> all)
             ]
         ]
 
--- type Metric = Float
--- type Temperature = Float
+type Metric = Float
+
+type Temperature = Float
+
+type RandomState = State StdGen
+
+liftRandom :: MonadState s m => (s -> (b, s)) -> m b
+liftRandom f = do
+  gen <- get
+  let (result, newGen) = f gen
+  put newGen
+  pure result
+
+randomRS :: (MonadState s m, Random b, RandomGen s) => (b, b) -> m b
+randomRS range = liftRandom (randomR range)
 
 -- -- https://medium.com/swlh/how-to-implement-simulated-annealing-algorithm-in-python-ab196c2f56a0
 -- -- https://oleg.fi/gists/posts/2020-06-02-simulated-annealing.html
--- simanneal :: Show s => s -> Metric -> (s -> IO s) -> (s -> Metric) -> Temperature -> Temperature -> IO s
--- simanneal startState startMetric chooseNeighbor metric startTemp tempDiff = tailRecM go { temp: startTemp, currentState: startState, currentMetric: startMetric }
---   where
---     go {temp, currentState, currentMetric} =
---       if temp <= 0.0
---       then do
---         --log ("Temperature is " <> show temp <> ", done.")
---         pure (Done currentState)
---       else do
---         newNeighbor <- chooseNeighbor currentState
---         let newNeighborMetric = metric newNeighbor
---             nextTemp = temp - tempDiff
---         --log ("New neighbor " <> show newNeighbor <> ", metric " <> show newNeighborMetric)
---         if newNeighborMetric > currentMetric
---         then do
---           --log "New neighbor better than old, choosing."
---           pure $ Loop { temp: nextTemp, currentState: newNeighbor, currentMetric: newNeighborMetric }
---         else do
---           r <- random
---           let decider = exp (-(currentMetric - newNeighborMetric) / temp)
---           if r < decider
---             then do
---               --log $ "New neighbor worse than old (" <> show currentMetric <> " - " <> show newNeighborMetric <> ")/" <> show temp <> "=" <> show decider <> " > " <> show r <> ", still choosing."
---               pure $ Loop { temp: nextTemp, currentState: newNeighbor, currentMetric: newNeighborMetric }
---             else do
---               --log "New neighbor worse than old, keeping old."
---               pure $ Loop { temp: nextTemp, currentState, currentMetric }
+simanneal :: s -> Metric -> (s -> RandomState s) -> (s -> Metric) -> Temperature -> Temperature -> RandomState s
+simanneal startState startMetric chooseNeighbor metric startTemp tempDiff = simanneal' startTemp startState startMetric
+  where
+    simanneal' temp currentState currentMetric =
+      if temp <= 0.0
+        then do
+          pure currentState
+        else do
+          newNeighbor <- chooseNeighbor currentState
+          let newNeighborMetric = metric newNeighbor
+              nextTemp = temp - tempDiff
+          if newNeighborMetric > currentMetric
+            then do
+              simanneal' nextTemp newNeighbor newNeighborMetric
+            else do
+              r <- randomRS (0.0, 1.0)
+              let decider = exp (-(currentMetric - newNeighborMetric) / temp)
+              if r < decider
+                then simanneal' nextTemp newNeighbor newNeighborMetric
+                else simanneal' nextTemp currentState currentMetric
 
--- simannealArray :: Effect (Array Int)
--- simannealArray = simanneal [1,5,7,4,8,2,9,3,6] 2.0 switchPoints calcMetric 100.0 0.01
---   where switchPoints a = do
---           firstIndex <- randomInt 0 9
---           secondIndex <- randomInt 0 9
---           case a !! firstIndex, a !! secondIndex of
---             Just x, Just y -> pure (updateAtIndices [Tuple firstIndex y, Tuple secondIndex x] a)
---             _, _ -> pure a
---         calcMetric a = sum (mapWithIndex (\i ae -> if ae == (i+1) then 1.0 else 0.0) a)
+removeIndex :: Int -> [a] -> [a]
+removeIndex i a = take i a ++ drop (i + 1) a
+
+removeRandomElement :: [a] -> RandomState (a, [a])
+removeRandomElement xs = do
+  randomIndex <- randomRS (0, length xs - 1)
+  pure (xs !! randomIndex, removeIndex randomIndex xs)
+
+annealTasks :: Weekday -> [Task a] -> RandomState [Task a]
+annealTasks weekday' allTasks =
+  let allocated :: Float
+      allocated = fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday'))
+      totalEstimate :: Float
+      totalEstimate = fromIntegral (sum (estimateInMinutes . timeEstimate <$> allTasks))
+      maxDistanceToAllocated :: Float
+      maxDistanceToAllocated = max allocated totalEstimate
+      taskMetric :: ([Task a], [Task a]) -> Metric
+      taskMetric (ts, _) =
+        let closeToAllocated :: Float
+            closeToAllocated = maxDistanceToAllocated - abs (allocated - fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))) / maxDistanceToAllocated
+            sumImportants = sum (importanceNumeric . importance <$> ts)
+         in closeToAllocated + 0.05 * fromIntegral sumImportants
+      mutateTasks :: ([Task a], [Task a]) -> RandomState ([Task a], [Task a])
+      mutateTasks (chosenTasks, openTasks) = do
+        removeOrAdd :: Int <- randomRS (1, 100)
+        let thisIterationRemoves = removeOrAdd <= 50
+        if length chosenTasks > 1 && thisIterationRemoves
+          then do
+            (removedTask, newChosenTasks) <- removeRandomElement chosenTasks
+            pure (newChosenTasks, removedTask : openTasks)
+          else
+            if length openTasks > 1
+              then do
+                (removedTask, newOpenTasks) <- removeRandomElement openTasks
+                pure (removedTask : chosenTasks, newOpenTasks)
+              else pure (chosenTasks, openTasks)
+   in if length allTasks <= 1
+        then pure allTasks
+        else do
+          (chosenTasks, _) <-
+            simanneal
+              (allTasks, [])
+              (taskMetric (allTasks, []))
+              mutateTasks
+              taskMetric
+              100.0
+              0.01
+          pure chosenTasks
 
 viewModel :: Model -> View Action
 viewModel m =
@@ -447,6 +498,7 @@ viewModel m =
       oldTasks = filter isOldTask (tasks m)
       newTasks :: [Task TaskId]
       newTasks = filter (not . isOldTask) (tasks m)
+      annealed = evalState (annealTasks (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen 1337)
       deadlineDays :: Task t -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 10
@@ -470,9 +522,14 @@ viewModel m =
           if statusMessages m /= []
             then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
             else text "",
+          h1_ [] [text (showMiso (length (tasks m)))],
           viewNewTaskForm m,
           hr_ [],
           viewProgressBar (today m) (weekday m) (selectedTasks m) (tasks m),
+          h5_ [] [text "Vorschlag"],
+          viewTasks
+            (selectedTasks m)
+            annealed,
           viewTasks (selectedTasks m) sortedTasks,
           if null oldTasks then text "" else h5_ [] [text "Old tasks"],
           if null oldTasks then text "" else viewTasks (selectedTasks m) oldTasks
