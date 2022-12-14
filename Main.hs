@@ -63,8 +63,8 @@ instance Show Importance where
     2 -> "Superwichtig"
     _ -> "Wichtigkeit(" <> show x <> ")"
 
-importanceNumeric :: Importance -> Int
-importanceNumeric (Importance x) = x
+-- importanceNumeric :: Importance -> Int
+-- importanceNumeric (Importance x) = x
 
 instance FromJSON Importance where
   parseJSON = withScientific "Importance" (pure . Importance . floor)
@@ -127,8 +127,8 @@ data Model = Model
     selectedTasks :: [TaskId],
     statusMessages :: [MisoString],
     today :: Day,
-    weekday :: Weekday
-    -- , timeSpent :: [ (Day, Int) ]
+    weekday :: Weekday,
+    seed :: Int
   }
   deriving (Show, Generic, Eq)
 
@@ -154,6 +154,7 @@ data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | Nop
   | Init
+  | IncreaseSeed
   | AddTaskClicked
   | ToggleDone TaskId
   | LocalStorageUpdated
@@ -182,7 +183,8 @@ initialModel =
       selectedTasks = [],
       statusMessages = mempty,
       today = toEnum 0,
-      weekday = Monday
+      weekday = Monday,
+      seed = 14
     }
 
 modelToLocalStorage :: Model -> LocalStorageModel
@@ -204,6 +206,7 @@ parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
+updateModel IncreaseSeed m = noEff (m {seed = seed m + 1})
 updateModel (LocalStorageReceived l) m =
   case l of
     Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
@@ -281,7 +284,7 @@ viewNewTaskForm m =
 weekdayToAllocationTime :: Weekday -> TimeEstimate
 weekdayToAllocationTime Saturday = TimeEstimate 180
 weekdayToAllocationTime Sunday = TimeEstimate 180
-weekdayToAllocationTime _ = TimeEstimate 120
+weekdayToAllocationTime _ = TimeEstimate 80
 
 estimateInMinutes :: TimeEstimate -> Int
 estimateInMinutes (TimeEstimate e) = e
@@ -461,8 +464,9 @@ annealTasks weekday' allTasks =
       taskMetric (ts, _) =
         let closeToAllocated :: Float
             closeToAllocated = maxDistanceToAllocated - abs (allocated - fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))) / maxDistanceToAllocated
-            sumImportants = sum (importanceNumeric . importance <$> ts)
-         in closeToAllocated + 0.05 * fromIntegral sumImportants
+         in --    sumImportants = sum (importanceNumeric . importance <$> ts)
+            -- in closeToAllocated + 0.05 * fromIntegral sumImportants
+            closeToAllocated
       mutateTasks :: ([Task a], [Task a]) -> RandomState ([Task a], [Task a])
       mutateTasks (chosenTasks, openTasks) = do
         removeOrAdd :: Int <- randomRS (1, 100)
@@ -486,7 +490,7 @@ annealTasks weekday' allTasks =
               (taskMetric (allTasks, []))
               mutateTasks
               taskMetric
-              100.0
+              200.0
               0.01
           pure chosenTasks
 
@@ -498,7 +502,7 @@ viewModel m =
       oldTasks = filter isOldTask (tasks m)
       newTasks :: [Task TaskId]
       newTasks = filter (not . isOldTask) (tasks m)
-      annealed = evalState (annealTasks (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen 1337)
+      annealed = evalState (annealTasks (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen (seed m))
       deadlineDays :: Task t -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 4
@@ -517,11 +521,11 @@ viewModel m =
           if statusMessages m /= []
             then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
             else text "",
-          h1_ [] [text (showMiso (length (tasks m)))],
+          div_ [] [button_ [type_ "button", class_ "btn btn-primary w-100", onClick IncreaseSeed] [text $ "Seed+1 (at " <> showMiso (seed m) <> ")"]],
           viewNewTaskForm m,
           hr_ [],
           viewProgressBar (today m) (weekday m) (selectedTasks m) (tasks m),
-          h5_ [] [text "Vorschlag"],
+          h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> annealed)) <> ")"],
           viewTasks
             (selectedTasks m)
             annealed,
