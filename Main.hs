@@ -501,19 +501,14 @@ viewModel m =
       annealed = evalState (annealTasks (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen 1337)
       deadlineDays :: Task t -> Integer
       deadlineDays t = case deadline t of
-        Nothing -> 10
+        Nothing -> 4
         Just d ->
           let difference = diffDays d (today m)
            in if difference < 0
                 then 0
-                else
-                  if difference == 0
-                    then 1
-                    else 1 + max 2 difference
+                else 1 + min 2 difference
       sortedTasks =
-        sortBy (comparing (Down . timeEstimate)) $
-          sortBy (comparing (Down . importance)) $
-            sortBy (comparing deadlineDays) newTasks
+        sortBy (comparing deadlineDays <> comparing (Down . importance) <> comparing (Down . timeEstimate)) newTasks
    in div_
         [class_ "container"]
         [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css", rel_ "stylesheet"],
