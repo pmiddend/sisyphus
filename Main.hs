@@ -10,7 +10,7 @@ module Main (main) where
 
 import Control.Monad.State.Strict (MonadState, State, evalState, get, put)
 import Data.Aeson
-import Data.List (find, maximumBy, sortBy)
+import Data.List (find, maximumBy, partition, sortBy)
 import qualified Data.Map as M
 import Data.Maybe (isJust, isNothing)
 import Data.Ord (Down (..), comparing)
@@ -452,20 +452,21 @@ removeRandomElement xs = do
   randomIndex <- randomRS (0, length xs - 1)
   pure (xs !! randomIndex, removeIndex randomIndex xs)
 
-annealTasks :: Weekday -> [Task a] -> RandomState [Task a]
-annealTasks weekday' allTasks =
+annealTasks :: forall a. Day -> Weekday -> [Task a] -> RandomState [Task a]
+annealTasks today' weekday' allTasks =
   let allocated :: Float
       allocated = fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday'))
       totalEstimate :: Float
       totalEstimate = fromIntegral (sum (estimateInMinutes . timeEstimate <$> allTasks))
       maxDistanceToAllocated :: Float
       maxDistanceToAllocated = max allocated totalEstimate
+      (baseTasks, remainingTasks) = partition (\t -> deadline t == Just today') allTasks
       taskMetric :: ([Task a], [Task a]) -> Metric
       taskMetric (ts, _) =
         let closeToAllocated :: Float
-            closeToAllocated = maxDistanceToAllocated - abs (allocated - fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))) / maxDistanceToAllocated
-         in --    sumImportants = sum (importanceNumeric . importance <$> ts)
-            -- in closeToAllocated + 0.05 * fromIntegral sumImportants
+            closeToAllocated = maxDistanceToAllocated - abs (allocated - fromIntegral (sum ((estimateInMinutes . timeEstimate) <$> (ts <> baseTasks)))) / maxDistanceToAllocated
+         in --            sumImportants = sum ((importanceNumeric . importance) <$> (ts <> baseTasks))
+            --         in closeToAllocated + 0.05 * fromIntegral sumImportants
             closeToAllocated
       mutateTasks :: ([Task a], [Task a]) -> RandomState ([Task a], [Task a])
       mutateTasks (chosenTasks, openTasks) = do
@@ -481,18 +482,18 @@ annealTasks weekday' allTasks =
                 (removedTask, newOpenTasks) <- removeRandomElement openTasks
                 pure (removedTask : chosenTasks, newOpenTasks)
               else pure (chosenTasks, openTasks)
-   in if length allTasks <= 1
+   in if length allTasks <= 1 || null remainingTasks
         then pure allTasks
         else do
           (chosenTasks, _) <-
             simanneal
-              (allTasks, [])
-              (taskMetric (allTasks, []))
+              (remainingTasks, [])
+              (taskMetric (remainingTasks, []))
               mutateTasks
               taskMetric
               200.0
               0.01
-          pure chosenTasks
+          pure (baseTasks <> chosenTasks)
 
 viewModel :: Model -> View Action
 viewModel m =
@@ -502,7 +503,7 @@ viewModel m =
       oldTasks = filter isOldTask (tasks m)
       newTasks :: [Task TaskId]
       newTasks = filter (not . isOldTask) (tasks m)
-      annealed = evalState (annealTasks (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen (seed m))
+      annealed = evalState (annealTasks (today m) (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen (seed m))
       deadlineDays :: Task t -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 4
