@@ -475,7 +475,7 @@ viewModel m =
           viewProgressBar (today m) (weekday m) (selectedTasks m) (tasks m),
           viewTasks (selectedTasks m) sortedTasks,
           if null oldTasks then text "" else h5_ [] [text "Old tasks"],
-          viewTasks (selectedTasks m) oldTasks
+          if null oldTasks then text "" else viewTasks (selectedTasks m) oldTasks
         ]
 
 #ifndef __GHCJS__
