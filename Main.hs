@@ -63,8 +63,8 @@ instance Show Importance where
     2 -> "Superwichtig"
     _ -> "Wichtigkeit(" <> show x <> ")"
 
--- importanceNumeric :: Importance -> Int
--- importanceNumeric (Importance x) = x
+importanceNumeric :: Importance -> Int
+importanceNumeric (Importance x) = x
 
 instance FromJSON Importance where
   parseJSON = withScientific "Importance" (pure . Importance . floor)
@@ -417,8 +417,8 @@ annealTasks :: forall a. Seed -> Day -> Weekday -> [Task a] -> [Task a]
 annealTasks seed today' weekday' allTasks =
   let taskEstimateSum :: [Task a] -> Float
       taskEstimateSum ts = fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))
-      -- taskImportanceSum :: [Task a] -> Float
-      -- taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
+      taskImportanceSum :: [Task a] -> Float
+      taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
       allocated :: Float
       allocated = fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday'))
       totalEstimate :: Float
@@ -432,9 +432,8 @@ annealTasks seed today' weekday' allTasks =
       taskEnergy (ts, _) =
         let closeToAllocated :: Float
             closeToAllocated = (distance allocated (taskEstimateSum (ts <> baseTasks))) / maxDistanceToAllocated
-         in Energy closeToAllocated
-      --    sumImportance = taskImportanceSum ts
-      -- in closeToAllocated + 0.00 * sumImportance
+            sumImportance = taskImportanceSum ts
+         in Energy (closeToAllocated - 0.05 * sumImportance)
       mutateTasks :: ([Task a], [Task a]) -> SimannealState ([Task a], [Task a]) ([Task a], [Task a])
       mutateTasks (chosenTasks, openTasks) = do
         removeOrAdd :: Int <- randomRS (1, 100)
