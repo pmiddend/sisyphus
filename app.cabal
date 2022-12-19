@@ -7,6 +7,7 @@ cabal-version:       >=1.10
 
 executable app
   main-is:             Main.hs
+  other-modules:       Simanneal
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   ghcjs-options:
     -dedupe

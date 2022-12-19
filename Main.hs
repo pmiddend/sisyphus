@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -8,7 +9,6 @@
 
 module Main (main) where
 
-import Control.Monad.State.Strict (MonadState, State, evalState, get, put)
 import Data.Aeson
 import Data.List (find, maximumBy, partition, sortBy)
 import qualified Data.Map as M
@@ -19,7 +19,7 @@ import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
 import Miso
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
-import System.Random (Random, RandomGen, StdGen, mkStdGen, randomR)
+import Simanneal
 import Prelude hiding (all)
 #ifndef __GHCJS__
 import           Language.Javascript.JSaddle.Warp as JSaddle
@@ -405,70 +405,37 @@ viewTasks selectedIds all =
             ]
         ]
 
-type Metric = Float
-
-type Temperature = Float
-
-type RandomState = State StdGen
-
-liftRandom :: MonadState s m => (s -> (b, s)) -> m b
-liftRandom f = do
-  gen <- get
-  let (result, newGen) = f gen
-  put newGen
-  pure result
-
-randomRS :: (MonadState s m, Random b, RandomGen s) => (b, b) -> m b
-randomRS range = liftRandom (randomR range)
-
--- -- https://medium.com/swlh/how-to-implement-simulated-annealing-algorithm-in-python-ab196c2f56a0
--- -- https://oleg.fi/gists/posts/2020-06-02-simulated-annealing.html
-simanneal :: s -> Metric -> (s -> RandomState s) -> (s -> Metric) -> Temperature -> Temperature -> RandomState s
-simanneal startState startMetric chooseNeighbor metric startTemp tempDiff = simanneal' startTemp startState startMetric
-  where
-    simanneal' temp currentState currentMetric =
-      if temp <= 0.0
-        then do
-          pure currentState
-        else do
-          newNeighbor <- chooseNeighbor currentState
-          let newNeighborMetric = metric newNeighbor
-              nextTemp = temp - tempDiff
-          if newNeighborMetric > currentMetric
-            then do
-              simanneal' nextTemp newNeighbor newNeighborMetric
-            else do
-              r <- randomRS (0.0, 1.0)
-              let decider = exp (-(currentMetric - newNeighborMetric) / temp)
-              if r < decider
-                then simanneal' nextTemp newNeighbor newNeighborMetric
-                else simanneal' nextTemp currentState currentMetric
-
 removeIndex :: Int -> [a] -> [a]
 removeIndex i a = take i a ++ drop (i + 1) a
 
-removeRandomElement :: [a] -> RandomState (a, [a])
+removeRandomElement :: [a] -> SimannealState ([a], [a]) (a, [a])
 removeRandomElement xs = do
   randomIndex <- randomRS (0, length xs - 1)
   pure (xs !! randomIndex, removeIndex randomIndex xs)
 
-annealTasks :: forall a. Day -> Weekday -> [Task a] -> RandomState [Task a]
-annealTasks today' weekday' allTasks =
-  let allocated :: Float
+annealTasks :: forall a. Seed -> Day -> Weekday -> [Task a] -> [Task a]
+annealTasks seed today' weekday' allTasks =
+  let taskEstimateSum :: [Task a] -> Float
+      taskEstimateSum ts = fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))
+      -- taskImportanceSum :: [Task a] -> Float
+      -- taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
+      allocated :: Float
       allocated = fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday'))
       totalEstimate :: Float
-      totalEstimate = fromIntegral (sum (estimateInMinutes . timeEstimate <$> allTasks))
+      totalEstimate = taskEstimateSum allTasks
       maxDistanceToAllocated :: Float
       maxDistanceToAllocated = max allocated totalEstimate
+      distance :: Float -> Float -> Float
+      distance x y = abs (x - y)
       (baseTasks, remainingTasks) = partition (\t -> deadline t == Just today') allTasks
-      taskMetric :: ([Task a], [Task a]) -> Metric
-      taskMetric (ts, _) =
+      taskEnergy :: ([Task a], [Task a]) -> Energy
+      taskEnergy (ts, _) =
         let closeToAllocated :: Float
-            closeToAllocated = maxDistanceToAllocated - abs (allocated - fromIntegral (sum ((estimateInMinutes . timeEstimate) <$> (ts <> baseTasks)))) / maxDistanceToAllocated
-         in --            sumImportants = sum ((importanceNumeric . importance) <$> (ts <> baseTasks))
-            --         in closeToAllocated + 0.05 * fromIntegral sumImportants
-            closeToAllocated
-      mutateTasks :: ([Task a], [Task a]) -> RandomState ([Task a], [Task a])
+            closeToAllocated = (distance allocated (taskEstimateSum (ts <> baseTasks))) / maxDistanceToAllocated
+         in Energy closeToAllocated
+      --    sumImportance = taskImportanceSum ts
+      -- in closeToAllocated + 0.00 * sumImportance
+      mutateTasks :: ([Task a], [Task a]) -> SimannealState ([Task a], [Task a]) ([Task a], [Task a])
       mutateTasks (chosenTasks, openTasks) = do
         removeOrAdd :: Int <- randomRS (1, 100)
         let thisIterationRemoves = removeOrAdd <= 50
@@ -483,17 +450,10 @@ annealTasks today' weekday' allTasks =
                 pure (removedTask : chosenTasks, newOpenTasks)
               else pure (chosenTasks, openTasks)
    in if length allTasks <= 1 || null remainingTasks
-        then pure allTasks
-        else do
-          (chosenTasks, _) <-
-            simanneal
-              (remainingTasks, [])
-              (taskMetric (remainingTasks, []))
-              mutateTasks
-              taskMetric
-              200.0
-              0.01
-          pure (baseTasks <> chosenTasks)
+        then allTasks
+        else
+          let solution = simanneal seed (remainingTasks, []) mutateTasks taskEnergy 100.0 0.01 0.5
+           in (baseTasks <> fst solution)
 
 viewModel :: Model -> View Action
 viewModel m =
@@ -503,7 +463,7 @@ viewModel m =
       oldTasks = filter isOldTask (tasks m)
       newTasks :: [Task TaskId]
       newTasks = filter (not . isOldTask) (tasks m)
-      annealed = evalState (annealTasks (today m) (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))) (mkStdGen (seed m))
+      annealed = annealTasks (seed m) (today m) (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))
       deadlineDays :: Task t -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 4
