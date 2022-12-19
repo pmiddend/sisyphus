@@ -419,6 +419,13 @@ annealTasks seed today' weekday' allTasks =
       taskEstimateSum ts = fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))
       taskImportanceSum :: [Task a] -> Float
       taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
+      taskUrgency :: Task a -> Float
+      taskUrgency t = case deadline t of
+        Nothing -> 0.0
+        Just d ->
+          min 3.0 (fromIntegral (diffDays d today'))
+      taskUrgencySum :: [Task a] -> Float
+      taskUrgencySum ts = sum (taskUrgency <$> ts)
       allocated :: Float
       allocated = fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday'))
       totalEstimate :: Float
@@ -433,7 +440,8 @@ annealTasks seed today' weekday' allTasks =
         let closeToAllocated :: Float
             closeToAllocated = (distance allocated (taskEstimateSum (ts <> baseTasks))) / maxDistanceToAllocated
             sumImportance = taskImportanceSum ts
-         in Energy (closeToAllocated - 0.05 * sumImportance)
+            sumUrgency = taskUrgencySum ts
+         in Energy (closeToAllocated - 0.05 * sumImportance - 0.05 * sumUrgency)
       mutateTasks :: ([Task a], [Task a]) -> SimannealState ([Task a], [Task a]) ([Task a], [Task a])
       mutateTasks (chosenTasks, openTasks) = do
         removeOrAdd :: Int <- randomRS (1, 100)
@@ -481,14 +489,17 @@ viewModel m =
           if statusMessages m /= []
             then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
             else text "",
-          div_ [] [button_ [type_ "button", class_ "btn btn-primary w-100", onClick IncreaseSeed] [text $ "Seed+1 (at " <> showMiso (seed m) <> ")"]],
           viewNewTaskForm m,
           hr_ [],
           viewProgressBar (today m) (weekday m) (selectedTasks m) (tasks m),
-          h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> annealed)) <> ")"],
+          div_
+            [class_ "d-flex justify-content-between align-items-center"]
+            [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> annealed)) <> "min)"],
+              div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
+            ],
           viewTasks
             (selectedTasks m)
-            annealed,
+            (sortBy (comparing title) annealed),
           viewTasks (selectedTasks m) sortedTasks,
           if null oldTasks then text "" else h5_ [] [text "Old tasks"],
           if null oldTasks then text "" else viewTasks (selectedTasks m) oldTasks
