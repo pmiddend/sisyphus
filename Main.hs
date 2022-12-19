@@ -334,13 +334,20 @@ viewProgressBar today' weekday' selectedIds all =
 showMiso :: Show a => a -> MisoString
 showMiso = toMisoString . show
 
+showDate :: Day -> Day -> MisoString
+showDate today' d
+  | today' == d = "heute"
+  | succ today' == d = "morgen"
+  | succ (succ today') == d = "übermorgen"
+  | otherwise = showMiso d
+
 taskIsDone :: TaskId -> [Task TaskId] -> Bool
 taskIsDone i ts = case find ((== i) . taskId) ts of
   Nothing -> False
   Just t -> isJust (completionDay t)
 
-viewTasks :: [TaskId] -> [Task TaskId] -> View Action
-viewTasks selectedIds all =
+viewTasks :: Day -> [TaskId] -> [Task TaskId] -> View Action
+viewTasks today' selectedIds all =
   let viewTaskLine t =
         tr_
           []
@@ -376,7 +383,7 @@ viewTasks selectedIds all =
               [div_ [] [text (title t)]],
             td_
               []
-              [div_ [] [text (maybe "" showMiso (deadline t))]],
+              [div_ [] [text (maybe "" (showDate today') (deadline t))]],
             td_
               []
               [div_ [] [text (showMiso (importance t))]],
@@ -497,12 +504,10 @@ viewModel m =
             [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> annealed)) <> "min)"],
               div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
             ],
-          viewTasks
-            (selectedTasks m)
-            (sortBy (comparing title) annealed),
-          viewTasks (selectedTasks m) sortedTasks,
+          viewTasks (today m) (selectedTasks m) (sortBy (comparing title) annealed),
+          viewTasks (today m) (selectedTasks m) sortedTasks,
           if null oldTasks then text "" else h5_ [] [text "Old tasks"],
-          if null oldTasks then text "" else viewTasks (selectedTasks m) oldTasks
+          if null oldTasks then text "" else viewTasks (today m) (selectedTasks m) oldTasks
         ]
 
 #ifndef __GHCJS__
