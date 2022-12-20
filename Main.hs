@@ -121,7 +121,13 @@ newtype TaskId = TaskId Int deriving (Eq, Show, Ord)
 increaseTaskId :: TaskId -> TaskId
 increaseTaskId (TaskId i) = TaskId (i + 1)
 
--- | Type synonym for an application model
+newtype LeisureProject = LeisureProject
+  { leisureTitle :: MisoString
+  }
+  deriving (Show, Eq)
+
+data DisplayMode = DisplayWork | DisplayLeisure deriving (Show, Eq)
+
 data Model = Model
   { newTask :: Task (),
     tasks :: [Task TaskId],
@@ -129,7 +135,9 @@ data Model = Model
     statusMessages :: [MisoString],
     today :: Day,
     weekday :: Weekday,
-    seed :: Int
+    seed :: Int,
+    leisureProjects :: [LeisureProject],
+    displayMode :: DisplayMode
   }
   deriving (Show, Generic, Eq)
 
@@ -156,6 +164,7 @@ data Action
   | IncreaseSeed
   | AddTaskClicked
   | ToggleDone TaskId
+  | ToggleMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
   | CurrentWeekDayReceived Int
@@ -182,7 +191,9 @@ initialModel =
       statusMessages = mempty,
       today = toEnum 0,
       weekday = Monday,
-      seed = 14
+      seed = 14,
+      displayMode = DisplayWork,
+      leisureProjects = mempty
     }
 
 modelToLocalStorage :: Model -> LocalStorageModel
@@ -218,6 +229,15 @@ parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
 updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekday m) (tasks m)})
+updateModel ToggleMode m =
+  noEff
+    ( m
+        { displayMode =
+            case displayMode m of
+              DisplayWork -> DisplayLeisure
+              DisplayLeisure -> DisplayWork
+        }
+    )
 updateModel (LocalStorageReceived l) m =
   case l of
     Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
@@ -305,16 +325,20 @@ showDate today' d
   | otherwise = showMiso d
 
 importanceToIcon :: Importance -> View action
-importanceToIcon i =
-  let iconClass (Importance x)
-        | x == 0 = "reception-2"
-        | x == 1 = "reception-3"
-        | otherwise = "reception-4"
-      iconColor (Importance x)
-        | x == 0 = ""
-        | x == 1 = ""
-        | otherwise = ""
-   in i_ [class_ ("bi-" <> iconClass i <> " " <> iconColor i)] []
+importanceToIcon (Importance 0) = span_ [style_ (M.singleton "visibility" "hidden")] [text "😟"]
+importanceToIcon (Importance 1) = text "❗"
+importanceToIcon (Importance _) = text "🔥"
+
+-- importanceToIcon i =
+--   let iconClass (Importance x)
+--         | x == 0 = "reception-2"
+--         | x == 1 = "reception-3"
+--         | otherwise = "reception-4"
+--       iconColor (Importance x)
+--         | x == 0 = ""
+--         | x == 1 = ""
+--         | otherwise = ""
+--    in i_ [class_ ("bi-" <> iconClass i <> " " <> iconColor i)] []
 
 viewIcon :: MisoString -> View action
 viewIcon desc = i_ [class_ ("bi-" <> desc)] []
@@ -443,6 +467,16 @@ viewProgressBar today' weekday' all =
           description
         ]
 
+viewModeSwitcher :: Model -> View Action
+viewModeSwitcher m =
+  div_
+    [class_ "btn-group d-flex mb-3"]
+    [ input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-work", value_ "work", checked_ (displayMode m == DisplayWork), onClick ToggleMode],
+      label_ [for_ "display-mode-work", class_ "btn btn-lg btn-outline-secondary w-100"] [text "🏢 Arbeit"],
+      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-leisure", value_ "leisure", checked_ (displayMode m == DisplayLeisure), onClick ToggleMode],
+      label_ [for_ "display-mode-leisure", class_ "btn btn-lg btn-outline-secondary w-100"] ["😌 Freizeit"]
+    ]
+
 viewModel :: Model -> View Action
 viewModel m =
   let uncompletedTasks :: [Task TaskId]
@@ -468,7 +502,8 @@ viewModel m =
         [class_ "container"]
         [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
           link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet"],
-          header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] [i_ [class_ "bi-alarm"] [], " Sisyphus"]],
+          header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] ["⏰ Sisyphus"]],
+          viewModeSwitcher m,
           if statusMessages m /= []
             then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
             else text "",
