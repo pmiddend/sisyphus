@@ -10,10 +10,11 @@
 module Main (main) where
 
 import Data.Aeson
-import Data.List (find, maximumBy, partition, sortBy)
+import Data.List (maximumBy, partition, sortBy)
 import qualified Data.Map as M
 import Data.Maybe (isJust, isNothing)
 import Data.Ord (Down (..), comparing)
+import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
@@ -124,7 +125,7 @@ increaseTaskId (TaskId i) = TaskId (i + 1)
 data Model = Model
   { newTask :: Task (),
     tasks :: [Task TaskId],
-    selectedTasks :: [TaskId],
+    annealedTasks :: S.Set TaskId,
     statusMessages :: [MisoString],
     today :: Day,
     weekday :: Weekday,
@@ -133,12 +134,10 @@ data Model = Model
   deriving (Show, Generic, Eq)
 
 localStorageKey :: MisoString
-localStorageKey = "v3"
+localStorageKey = "v4"
 
 data LocalStorageModel = LocalStorageModel
-  { lsTasks :: [Task TaskId],
-    lsSelectedTasks :: [TaskId]
-    -- , lsTimeSpent :: [ (Day, Int) ]
+  { lsTasks :: [Task TaskId]
   }
   deriving (Generic, Show, Eq)
 
@@ -160,7 +159,6 @@ data Action
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
   | CurrentWeekDayReceived Int
-  | ToggleSelected TaskId
   | NewTaskChanged (Task ())
   deriving (Show, Eq)
 
@@ -179,8 +177,8 @@ initialModel :: Model
 initialModel =
   Model
     { newTask = initialTask,
-      tasks = [],
-      selectedTasks = [],
+      tasks = mempty,
+      annealedTasks = mempty,
       statusMessages = mempty,
       today = toEnum 0,
       weekday = Monday,
@@ -188,29 +186,42 @@ initialModel =
     }
 
 modelToLocalStorage :: Model -> LocalStorageModel
-modelToLocalStorage (Model {tasks = tasks, selectedTasks}) = LocalStorageModel tasks selectedTasks
-
--- appendStatus :: Model -> MisoString -> Effect Action Model
--- appendStatus m message = noEff (m {statusMessages = message : statusMessages m})
+modelToLocalStorage (Model {tasks = tasks}) = LocalStorageModel tasks
 
 setLocalStorageFromModel :: Model -> JSM Action
 setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
 
+taskEstimateSum :: [Task a] -> Float
+taskEstimateSum ts = fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))
+
+annealTasksInModel :: forall a. Ord a => Seed -> Day -> Weekday -> [Task a] -> S.Set a
+annealTasksInModel seed' today' weekday' tasks =
+  S.fromList
+    ( taskId
+        <$> annealTasks
+          seed'
+          today'
+          weekday'
+          (taskEstimateSum (filter (\t -> completionDay t == Just today') tasks))
+          (filter (\t -> isNothing (completionDay t)) tasks)
+    )
+
 updateTask :: Model -> TaskId -> (Task TaskId -> Task TaskId) -> Model
 updateTask m tid f =
   let possiblyEditTask t = if taskId t == tid then f t else t
-   in m {tasks = foldr (\t prevTasks -> possiblyEditTask t : prevTasks) [] (tasks m)}
+      newTasks = foldr (\t prevTasks -> possiblyEditTask t : prevTasks) [] (tasks m)
+   in m {tasks = newTasks}
 
 parseDay :: MisoString -> Maybe Day
 parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
-updateModel IncreaseSeed m = noEff (m {seed = seed m + 1})
+updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekday m) (tasks m)})
 updateModel (LocalStorageReceived l) m =
   case l of
     Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
-    Right v -> noEff (m {newTask = newTask m, tasks = lsTasks v, selectedTasks = lsSelectedTasks v})
+    Right v -> noEff (m {tasks = lsTasks v, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) (lsTasks v)})
 updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay, CurrentWeekDayReceived <$> getCurrentWeekday]
 updateModel Nop m = noEff m
 updateModel (CurrentWeekDayReceived d) m =
@@ -223,20 +234,13 @@ updateModel (CurrentDayReceived d) m =
     Right ddecoded -> case parseDay ddecoded of
       Nothing -> noEff (m {statusMessages = toMisoString ("couldn't parse \"" <> ddecoded <> "\"") : statusMessages m})
       Just todayParsed -> noEff (m {today = todayParsed})
-updateModel (ToggleSelected tid) m =
-  let newSelected =
-        if tid `elem` selectedTasks m
-          then filter (/= tid) (selectedTasks m)
-          else tid : selectedTasks m
-      newModel = m {selectedTasks = newSelected}
-   in newModel <# setLocalStorageFromModel newModel
 updateModel LocalStorageUpdated m = noEff m
 updateModel (NewTaskChanged nt) m = noEff (m {newTask = nt})
 updateModel (ToggleDone tid) m =
-  noEff $
-    updateTask m tid $ \t -> case completionDay t of
-      Nothing -> t {completionDay = Just (today m)}
-      Just _ -> t {completionDay = Nothing}
+  let newModel = updateTask m tid $ \t -> case completionDay t of
+        Nothing -> t {completionDay = Just (today m)}
+        Just _ -> t {completionDay = Nothing}
+   in newModel <# setLocalStorageFromModel newModel
 updateModel AddTaskClicked m =
   let maxId :: TaskId
       maxId = case tasks m of
@@ -244,7 +248,8 @@ updateModel AddTaskClicked m =
         _ -> taskId (maximumBy (comparing taskId) (tasks m))
       addedTask :: Task TaskId
       addedTask = increaseTaskId maxId <$ newTask m
-      newModel = m {newTask = initialTask, tasks = addedTask : tasks m}
+      newTasks = addedTask : tasks m
+      newModel = m {newTask = initialTask, tasks = newTasks, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) newTasks}
    in newModel <# (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel))
 
 viewNewTaskForm :: Model -> View Action
@@ -278,7 +283,7 @@ viewNewTaskForm m =
             [ input_ [type_ "date", id_ "deadline", class_ "form-control", value_ (maybe "" showMiso (deadline nt)), onInput (\i -> NewTaskChanged $ nt {deadline = parseDay i})],
               label_ [for_ "deadline"] [text "Deadline"]
             ],
-          button_ [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked] [text "Hinzufügen"]
+          button_ [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked] [viewIcon "save", text " Hinzufügen"]
         ]
 
 weekdayToAllocationTime :: Weekday -> TimeEstimate
@@ -288,48 +293,6 @@ weekdayToAllocationTime _ = TimeEstimate 80
 
 estimateInMinutes :: TimeEstimate -> Int
 estimateInMinutes (TimeEstimate e) = e
-
-buildProgressBar :: [(Int, Maybe MisoString)] -> View action
-buildProgressBar parts =
-  let sumTotal = fromIntegral (sum (fst <$> parts))
-      makePercentageString :: Int -> MisoString
-      makePercentageString part =
-        let integralResult :: Int
-            integralResult = round (fromIntegral part / sumTotal * 100.0 :: Float)
-         in showMiso integralResult <> "%"
-      makePart :: (Int, Maybe MisoString) -> View action
-      makePart (_, Nothing) = text ""
-      makePart (part, Just background) = div_ [class_ ("progress-bar " <> background), style_ (M.singleton "width" (makePercentageString part))] [text (showMiso part <> "min")]
-   in div_ [class_ "progress"] (makePart <$> parts)
-
-viewProgressBar :: Day -> Weekday -> [TaskId] -> [Task TaskId] -> View Action
-viewProgressBar today' weekday' selectedIds all =
-  let done :: Int
-      done = estimateInMinutes (foldMap timeEstimate (filter (\t -> completionDay t == Just today') all))
-      allocated :: Int
-      allocated = estimateInMinutes (weekdayToAllocationTime weekday')
-      selectedTotal :: Int
-      selectedTotal = estimateInMinutes (foldMap timeEstimate (filter (\t -> taskId t `elem` selectedIds) all))
-      overhang :: Int
-      overhang = max 0 (selectedTotal - allocated)
-      leftover = max 0 (allocated - selectedTotal)
-      description =
-        if leftover > 0
-          then small_ [] [strong_ [] [text (showMiso leftover <> "min")], text " übrig"]
-          else
-            if overhang > 0
-              then small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
-              else text ""
-   in div_
-        []
-        [ buildProgressBar
-            [ (min allocated done, Just "bg-success"),
-              (min allocated (selectedTotal - done), Just "bg-info"),
-              (overhang, Just "bg-danger"),
-              (leftover, Nothing)
-            ],
-          description
-        ]
 
 showMiso :: Show a => a -> MisoString
 showMiso = toMisoString . show
@@ -341,76 +304,50 @@ showDate today' d
   | succ (succ today') == d = "übermorgen"
   | otherwise = showMiso d
 
-taskIsDone :: TaskId -> [Task TaskId] -> Bool
-taskIsDone i ts = case find ((== i) . taskId) ts of
-  Nothing -> False
-  Just t -> isJust (completionDay t)
+importanceToIcon :: Importance -> View action
+importanceToIcon i =
+  let iconClass (Importance x)
+        | x == 0 = "reception-2"
+        | x == 1 = "reception-3"
+        | otherwise = "reception-4"
+      iconColor (Importance x)
+        | x == 0 = ""
+        | x == 1 = ""
+        | otherwise = ""
+   in i_ [class_ ("bi-" <> iconClass i <> " " <> iconColor i)] []
 
-viewTasks :: Day -> [TaskId] -> [Task TaskId] -> View Action
-viewTasks today' selectedIds all =
-  let viewTaskLine t =
-        tr_
-          []
-          [ td_
-              []
+viewIcon :: MisoString -> View action
+viewIcon desc = i_ [class_ ("bi-" <> desc)] []
+
+viewTasksListGroup :: Day -> [Task TaskId] -> View Action
+viewTasksListGroup today' all =
+  let viewTaskItem :: Task TaskId -> View Action
+      viewTaskItem t =
+        div_
+          [class_ "list-group-item"]
+          [ div_
+              [class_ "d-flex w-100 justify-content-between align-items-center"]
               [ div_
                   []
-                  [ input_
-                      [ class_ "form-check-input",
-                        type_ "checkbox",
-                        id_ ("select-" <> showMiso (taskId t)),
-                        onClick (ToggleSelected (taskId t)),
-                        checked_ (taskId t `elem` selectedIds)
-                      ]
-                  ]
-              ],
-            td_
-              []
-              [ div_
+                  [ input_ [type_ "checkbox", class_ "btn-check", id_ (showMiso (taskId t) <> "-check"), checked_ (isJust (completionDay t)), onClick (ToggleDone (taskId t))],
+                    label_
+                      [for_ (showMiso (taskId t) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
+                      [viewIcon "check-circle"],
+                    span_
+                      [class_ "ms-3 mb-1"]
+                      [importanceToIcon (importance t), text (" " <> title t)]
+                  ],
+                div_
                   []
-                  [ input_
-                      [ class_ "form-check-input",
-                        type_ "checkbox",
-                        id_ ("done-" <> showMiso (taskId t)),
-                        onClick (ToggleDone (taskId t)),
-                        checked_ (taskIsDone (taskId t) all),
-                        disabled_ (not $ taskId t `elem` selectedIds)
-                      ]
+                  [ maybe
+                      (text "")
+                      (\dl -> span_ [class_ "badge rounded-pill text-bg-success me-2"] [viewIcon "calendar-date", text (" " <> showDate today' dl)])
+                      (deadline t),
+                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (timeEstimate t))]
                   ]
-              ],
-            td_
-              []
-              [div_ [] [text (title t)]],
-            td_
-              []
-              [div_ [] [text (maybe "" (showDate today') (deadline t))]],
-            td_
-              []
-              [div_ [] [text (showMiso (importance t))]],
-            td_
-              []
-              [div_ [] [text (showMiso (timeEstimate t))]]
+              ]
           ]
-   in div_
-        []
-        [ -- h2_ [] [text ("current day/ws: " <> showMiso today' <> "/" <> showMiso weekday')],
-          table_
-            [class_ "table"]
-            [ thead_
-                []
-                [ tr_
-                    []
-                    [ th_ [] [text "Select"],
-                      th_ [] [text "Done"],
-                      th_ [] [text "Title"],
-                      th_ [] [text "Deadline"],
-                      th_ [] [text "Importance"],
-                      th_ [] [text "Estimate"]
-                    ]
-                ],
-              tbody_ [] (viewTaskLine <$> all)
-            ]
-        ]
+   in div_ [class_ "list-group list-group-flush"] (viewTaskItem <$> all)
 
 removeIndex :: Int -> [a] -> [a]
 removeIndex i a = take i a ++ drop (i + 1) a
@@ -420,11 +357,9 @@ removeRandomElement xs = do
   randomIndex <- randomRS (0, length xs - 1)
   pure (xs !! randomIndex, removeIndex randomIndex xs)
 
-annealTasks :: forall a. Seed -> Day -> Weekday -> [Task a] -> [Task a]
-annealTasks seed today' weekday' allTasks =
-  let taskEstimateSum :: [Task a] -> Float
-      taskEstimateSum ts = fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))
-      taskImportanceSum :: [Task a] -> Float
+annealTasks :: forall a. Seed -> Day -> Weekday -> Float -> [Task a] -> [Task a]
+annealTasks seed today' weekday' spentMinutes allTasks =
+  let taskImportanceSum :: [Task a] -> Float
       taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
       taskUrgency :: Task a -> Float
       taskUrgency t = case deadline t of
@@ -434,7 +369,7 @@ annealTasks seed today' weekday' allTasks =
       taskUrgencySum :: [Task a] -> Float
       taskUrgencySum ts = sum (taskUrgency <$> ts)
       allocated :: Float
-      allocated = fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday'))
+      allocated = max 0 (fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday')) - spentMinutes)
       totalEstimate :: Float
       totalEstimate = taskEstimateSum allTasks
       maxDistanceToAllocated :: Float
@@ -469,15 +404,54 @@ annealTasks seed today' weekday' allTasks =
           let solution = simanneal seed (remainingTasks, []) mutateTasks taskEnergy 100.0 0.01 0.5
            in (baseTasks <> fst solution)
 
+buildProgressBar :: [(Int, Maybe MisoString)] -> View action
+buildProgressBar parts =
+  let sumTotal = fromIntegral (sum (fst <$> parts))
+      makePercentageString :: Int -> MisoString
+      makePercentageString part =
+        let integralResult :: Int
+            integralResult = round (fromIntegral part / sumTotal * 100.0 :: Float)
+         in showMiso integralResult <> "%"
+      makePart :: (Int, Maybe MisoString) -> View action
+      makePart (_, Nothing) = text ""
+      makePart (part, Just background) = div_ [class_ ("progress-bar " <> background), style_ (M.singleton "width" (makePercentageString part))] [text (showMiso part <> "min")]
+   in div_ [class_ "progress"] (makePart <$> parts)
+
+viewProgressBar :: Day -> Weekday -> [Task TaskId] -> View Action
+viewProgressBar today' weekday' all =
+  let done :: Int
+      done = estimateInMinutes (foldMap timeEstimate (filter (\t -> completionDay t == Just today') all))
+      allocated :: Int
+      allocated = estimateInMinutes (weekdayToAllocationTime weekday')
+      overhang :: Int
+      overhang = max 0 (done - allocated)
+      leftover = max 0 (allocated - done)
+      description =
+        if leftover > 0
+          then small_ [] [strong_ [] [text (showMiso leftover <> "min")], text " übrig"]
+          else
+            if overhang > 0
+              then small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
+              else text ""
+   in div_
+        [class_ "mb-3"]
+        [ buildProgressBar
+            [ (min allocated done, Just "bg-success"),
+              (overhang, Just "bg-danger"),
+              (leftover, Nothing)
+            ],
+          description
+        ]
+
 viewModel :: Model -> View Action
 viewModel m =
-  let isOldTask :: Task t -> Bool
-      isOldTask t = maybe False (\cd -> cd < (today m)) (completionDay t)
-      oldTasks :: [Task TaskId]
-      oldTasks = filter isOldTask (tasks m)
-      newTasks :: [Task TaskId]
-      newTasks = filter (not . isOldTask) (tasks m)
-      annealed = annealTasks (seed m) (today m) (weekday m) (filter (\t -> isNothing (completionDay t)) (tasks m))
+  let uncompletedTasks :: [Task TaskId]
+      uncompletedTasks = filter (\t -> maybe True id ((>= today m) <$> completionDay t)) (tasks m)
+      taskIdsDoneToday :: S.Set TaskId
+      taskIdsDoneToday = S.fromList (taskId <$> (filter (\t -> completionDay t == Just (today m)) uncompletedTasks))
+      annealedIdsAndDoneToday :: S.Set TaskId
+      annealedIdsAndDoneToday = annealedTasks m <> taskIdsDoneToday
+      (todayTasks, remainingTasks) = partition (\t -> taskId t `S.member` annealedIdsAndDoneToday) uncompletedTasks
       deadlineDays :: Task t -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 4
@@ -486,11 +460,13 @@ viewModel m =
            in if difference < 0
                 then 0
                 else 1 + min 2 difference
-      sortedTasks =
-        sortBy (comparing deadlineDays <> comparing (Down . importance) <> comparing (Down . timeEstimate)) newTasks
+      sortedRemainingTasks =
+        sortBy
+          (comparing deadlineDays <> comparing (Down . importance) <> comparing (Down . timeEstimate))
+          remainingTasks
    in div_
         [class_ "container"]
-        [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css", rel_ "stylesheet"],
+        [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
           link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet"],
           header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] [i_ [class_ "bi-alarm"] [], " Sisyphus"]],
           if statusMessages m /= []
@@ -498,16 +474,15 @@ viewModel m =
             else text "",
           viewNewTaskForm m,
           hr_ [],
-          viewProgressBar (today m) (weekday m) (selectedTasks m) (tasks m),
+          viewProgressBar (today m) (weekday m) (tasks m),
           div_
             [class_ "d-flex justify-content-between align-items-center"]
-            [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> annealed)) <> "min)"],
-              div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
+            [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> todayTasks)) <> "min)"]
+            -- div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
             ],
-          viewTasks (today m) (selectedTasks m) (sortBy (comparing title) annealed),
-          viewTasks (today m) (selectedTasks m) sortedTasks,
-          if null oldTasks then text "" else h5_ [] [text "Old tasks"],
-          if null oldTasks then text "" else viewTasks (today m) (selectedTasks m) oldTasks
+          viewTasksListGroup (today m) (sortBy (comparing (Down . importance) <> comparing title) todayTasks),
+          if null remainingTasks then text "" else h5_ [] [text "Andere Aufgaben"],
+          if null remainingTasks then text "" else viewTasksListGroup (today m) sortedRemainingTasks
         ]
 
 #ifndef __GHCJS__
