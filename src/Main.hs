@@ -9,18 +9,21 @@
 
 module Main (main) where
 
+-- This is 1.8.0.4
+
 import Data.Aeson
 import Data.List (maximumBy, partition, sortBy)
 import qualified Data.Map as M
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Ord (Down (..), comparing)
 import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
+import Data.Time.Calendar.WeekDate (toWeekDate)
 import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
 import Miso
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
-import Simanneal
+import Task
 import Prelude hiding (all)
 #ifndef __GHCJS__
 import           Language.Javascript.JSaddle.Warp as JSaddle
@@ -42,108 +45,10 @@ foreign import javascript unsafe "$r = new Date().getDay()"
   getCurrentWeekday :: JSM Int
 #endif
 
-data Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday deriving (Show, Eq)
-
-fromJsWeekday :: Int -> Maybe Weekday
-fromJsWeekday i = case i of
-  0 -> Just Sunday
-  1 -> Just Monday
-  2 -> Just Tuesday
-  3 -> Just Wednesday
-  4 -> Just Thursday
-  5 -> Just Friday
-  6 -> Just Saturday
-  _ -> Nothing
-
-newtype Importance = Importance Int deriving (Eq, Ord)
-
-instance Show Importance where
-  show (Importance x) = case x of
-    0 -> "Unwichtig"
-    1 -> "Wichtig"
-    2 -> "Superwichtig"
-    _ -> "Wichtigkeit(" <> show x <> ")"
-
-importanceNumeric :: Importance -> Int
-importanceNumeric (Importance x) = x
-
-instance FromJSON Importance where
-  parseJSON = withScientific "Importance" (pure . Importance . floor)
-
-instance FromJSON TaskId where
-  parseJSON = withScientific "TaskId" (pure . TaskId . floor)
-
-instance FromJSON LeisureId where
-  parseJSON = withScientific "LeisureId" (pure . LeisureId . floor)
-
-newtype TimeEstimate = TimeEstimate Int deriving (Eq, Ord)
-
-instance Semigroup TimeEstimate where
-  TimeEstimate a <> TimeEstimate b = TimeEstimate (a + b)
-
-instance Monoid TimeEstimate where
-  mempty = TimeEstimate 0
-
-instance Show TimeEstimate where
-  show (TimeEstimate x) = case x of
-    10 -> "<10min"
-    30 -> "30min"
-    60 -> "1h"
-    120 -> ">1h"
-    _ -> show x <> "min"
-
-instance FromJSON TimeEstimate where
-  parseJSON = withScientific "TimeEstimate" (pure . TimeEstimate . floor)
-
-data Task a = Task
-  { title :: MisoString,
-    importance :: Importance,
-    deadline :: Maybe Day,
-    timeEstimate :: TimeEstimate,
-    completionDay :: Maybe Day,
-    taskId :: a
-  }
-  deriving (Show, Generic, Eq, Functor)
-
-instance FromJSON a => FromJSON (Task a) where
-  parseJSON = withObject "Task" $ \v -> Task <$> (v .: "title") <*> (v .: "importance") <*> (v .: "deadline") <*> (v .: "time-estimate") <*> (v .: "completion-day") <*> (v .: "id")
-
-instance ToJSON a => ToJSON (Task a) where
-  toJSON (Task title (Importance importance) deadline (TimeEstimate timeEstimate) completionDay taskId) =
-    object
-      [ "title" .= title,
-        "importance" .= importance,
-        "time-estimate" .= timeEstimate,
-        "completion-day" .= completionDay,
-        "deadline" .= deadline,
-        "id" .= taskId
-      ]
-
-newtype TaskId = TaskId Int deriving (Eq, Show, Ord)
-
-increaseTaskId :: TaskId -> TaskId
-increaseTaskId (TaskId i) = TaskId (i + 1)
-
-increaseLeisureId :: LeisureId -> LeisureId
-increaseLeisureId (LeisureId i) = LeisureId (i + 1)
-
-newtype LeisureId = LeisureId Int deriving (Eq, Show, Ord)
-
-data LeisureProject a = LeisureProject
-  { leisureTitle :: MisoString,
-    leisureId :: a
-  }
-  deriving (Show, Eq, Generic, Functor)
-
-instance FromJSON a => FromJSON (LeisureProject a)
-
-instance ToJSON a => ToJSON (LeisureProject a)
-
-data DisplayMode = DisplayWork | DisplayLeisure deriving (Show, Eq)
-
 data Model = Model
-  { newTask :: Task (),
-    tasks :: [Task TaskId],
+  { newTask :: Task () (Maybe Repeater),
+    tasks :: [RegularTask],
+    repeatingTasks :: [RepeatingTask],
     annealedTasks :: S.Set TaskId,
     statusMessages :: [MisoString],
     today :: Day,
@@ -156,19 +61,14 @@ data Model = Model
   deriving (Show, Generic, Eq)
 
 localStorageKey :: MisoString
-localStorageKey = "v5"
+localStorageKey = "v6"
 
 data LocalStorageModel = LocalStorageModel
-  { lsTasks :: [Task TaskId],
+  { lsTasks :: [Task TaskId (Maybe TaskId)],
+    lsRepeatingTasks :: [Task TaskId Repeater],
     lsLeisureProjects :: [LeisureProject LeisureId]
   }
   deriving (Generic, Show, Eq)
-
-instance ToJSON TaskId where
-  toJSON (TaskId i) = toJSON i
-
-instance ToJSON LeisureId where
-  toJSON (LeisureId i) = toJSON i
 
 instance FromJSON LocalStorageModel
 
@@ -184,15 +84,16 @@ data Action
   | AddLeisureProjectClicked
   | ToggleLeisureProject LeisureId
   | ToggleDone TaskId
+  | ToggleRepeatingDone TaskId
   | ToggleMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
   | CurrentWeekDayReceived Int
-  | NewTaskChanged (Task ())
+  | NewTaskChanged (Task () (Maybe Repeater))
   | NewLeisureProjectChanged (LeisureProject ())
   deriving (Show, Eq)
 
-initialTask :: Task ()
+initialTask :: Task () (Maybe Repeater)
 initialTask =
   Task
     { title = "",
@@ -200,7 +101,8 @@ initialTask =
       deadline = Nothing,
       timeEstimate = TimeEstimate 10,
       completionDay = Nothing,
-      taskId = ()
+      taskId = (),
+      repeater = Nothing
     }
 
 initialModel :: Model
@@ -208,11 +110,12 @@ initialModel =
   Model
     { newTask = initialTask,
       tasks = mempty,
+      repeatingTasks = mempty,
       annealedTasks = mempty,
       statusMessages = mempty,
       today = toEnum 0,
       weekday = Monday,
-      seed = 14,
+      seed = 15,
       displayMode = DisplayWork,
       leisureProjects = mempty,
       newLeisureProject = initialLeisureProject
@@ -222,38 +125,78 @@ initialLeisureProject :: LeisureProject ()
 initialLeisureProject = LeisureProject {leisureTitle = "", leisureId = ()}
 
 modelToLocalStorage :: Model -> LocalStorageModel
-modelToLocalStorage (Model {tasks = tasks, leisureProjects = leisureProjects}) = LocalStorageModel tasks leisureProjects
+modelToLocalStorage (Model {tasks = tasks, repeatingTasks = repeatingTasks, leisureProjects = leisureProjects}) = LocalStorageModel tasks repeatingTasks leisureProjects
 
 setLocalStorageFromModel :: Model -> JSM Action
 setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
 
-taskEstimateSum :: [Task a] -> Float
-taskEstimateSum ts = fromIntegral (sum (estimateInMinutes . timeEstimate <$> ts))
-
-annealTasksInModel :: forall a. Ord a => Seed -> Day -> Weekday -> [Task a] -> S.Set a
-annealTasksInModel seed' today' weekday' tasks =
-  S.fromList
-    ( taskId
-        <$> annealTasks
-          seed'
-          today'
-          weekday'
-          (taskEstimateSum (filter (\t -> completionDay t == Just today') tasks))
-          (filter (\t -> isNothing (completionDay t)) tasks)
-    )
-
-updateTask :: Model -> TaskId -> (Task TaskId -> Task TaskId) -> Model
+updateTask :: Model -> TaskId -> (RegularTask -> RegularTask) -> Model
 updateTask m tid f =
   let possiblyEditTask t = if taskId t == tid then f t else t
       newTasks = foldr (\t prevTasks -> possiblyEditTask t : prevTasks) [] (tasks m)
    in m {tasks = newTasks}
 
+updateRepeatingTask :: Model -> TaskId -> (RepeatingTask -> RepeatingTask) -> Model
+updateRepeatingTask m tid f =
+  let possiblyEditTask t = if taskId t == tid then f t else t
+      newTasks = foldr (\t prevTasks -> possiblyEditTask t : prevTasks) [] (repeatingTasks m)
+   in m {repeatingTasks = newTasks}
+
 parseDay :: MisoString -> Maybe Day
 parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 
+safeMaximum :: Ord a => [a] -> Maybe a
+safeMaximum [] = Nothing
+safeMaximum xs = Just (maximum xs)
+
+calculateWeekday :: Day -> Weekday
+calculateWeekday d =
+  let (_, _, dow) = toWeekDate d
+   in case dow of
+        1 -> Monday
+        2 -> Tuesday
+        3 -> Wednesday
+        4 -> Thursday
+        5 -> Friday
+        6 -> Saturday
+        _ -> Sunday
+
+goBackUntilWeekdayMatches :: Weekday -> Day -> Day
+goBackUntilWeekdayMatches repeatOn lastClosing =
+  if calculateWeekday lastClosing == repeatOn
+    then lastClosing
+    else goBackUntilWeekdayMatches repeatOn (pred lastClosing)
+
+createRepeatingTasks :: Day -> [RegularTask] -> [RepeatingTask] -> [RegularTask]
+createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
+  where
+    createTask rt = [const (Just (taskId rt)) `mapRepeater` rt]
+    possiblyRepeat :: RepeatingTask -> [RegularTask]
+    possiblyRepeat rt
+      | isJust (completionDay rt) = []
+      | otherwise =
+        let hasOpenCandidate = any (\t -> repeater t == Just (taskId rt) && isNothing (completionDay t)) regularTasks
+         in if hasOpenCandidate
+              then []
+              else
+                let lastClosing = safeMaximum (mapMaybe (\t -> if repeater t == Just (taskId rt) then (completionDay t) else Nothing) regularTasks)
+                 in case lastClosing of
+                      Nothing -> createTask rt
+                      Just lc ->
+                        case repeater rt of
+                          EveryNDays n ->
+                            if diffDays today' lc >= fromIntegral n
+                              then createTask rt
+                              else []
+                          EveryWeekday repeatOn ->
+                            let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
+                             in if diffDays previousToBeClosed today' >= 7
+                                  then createTask rt
+                                  else []
+
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
-updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekday m) (tasks m)})
+updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekdayToAllocationTime (weekday m)) (tasks m)})
 updateModel (ToggleLeisureProject projectId) m =
   let newModel = m {leisureProjects = filter (\lp -> leisureId lp /= projectId) (leisureProjects m)}
    in newModel <# setLocalStorageFromModel newModel
@@ -269,7 +212,16 @@ updateModel ToggleMode m =
 updateModel (LocalStorageReceived l) m =
   case l of
     Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
-    Right v -> noEff (m {leisureProjects = lsLeisureProjects v, tasks = lsTasks v, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) (lsTasks v)})
+    Right v ->
+      let tasksAndRepeated = lsTasks v <> createRepeatingTasks (today m) (lsTasks v) (lsRepeatingTasks v)
+       in noEff
+            ( m
+                { leisureProjects = lsLeisureProjects v,
+                  tasks = tasksAndRepeated,
+                  repeatingTasks = lsRepeatingTasks v,
+                  annealedTasks = annealTasksInModel (seed m) (today m) (weekdayToAllocationTime (weekday m)) tasksAndRepeated
+                }
+            )
 updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay, CurrentWeekDayReceived <$> getCurrentWeekday]
 updateModel Nop m = noEff m
 updateModel (CurrentWeekDayReceived d) m =
@@ -290,15 +242,35 @@ updateModel (ToggleDone tid) m =
         Nothing -> t {completionDay = Just (today m)}
         Just _ -> t {completionDay = Nothing}
    in newModel <# setLocalStorageFromModel newModel
+updateModel (ToggleRepeatingDone tid) m =
+  let newModel = updateRepeatingTask m tid $ \t -> case completionDay t of
+        Nothing -> t {completionDay = Just (today m)}
+        Just _ -> t {completionDay = Nothing}
+   in newModel <# setLocalStorageFromModel newModel
 updateModel AddTaskClicked m =
   let maxId :: TaskId
-      maxId = case tasks m of
-        [] -> TaskId 0
-        _ -> taskId (maximumBy (comparing taskId) (tasks m))
-      addedTask :: Task TaskId
-      addedTask = increaseTaskId maxId <$ newTask m
-      newTasks = addedTask : tasks m
-      newModel = m {newTask = initialTask, tasks = newTasks, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) newTasks}
+      maxId = fromMaybe (TaskId 0) (safeMaximum ((taskId <$> tasks m) <> (taskId <$> repeatingTasks m)))
+      newTaskWithId :: Task TaskId (Maybe Repeater)
+      newTaskWithId = const (increaseTaskId maxId) `mapTaskId` newTask m
+      newModel =
+        case repeater (newTask m) of
+          Nothing ->
+            let newNonrepeatingTask :: RegularTask
+                newNonrepeatingTask = (const Nothing) `mapRepeater` newTaskWithId
+                newTasks = newNonrepeatingTask : tasks m
+             in m
+                  { newTask = initialTask,
+                    tasks = newTasks,
+                    annealedTasks = annealTasksInModel (seed m) (today m) (weekdayToAllocationTime (weekday m)) newTasks
+                  }
+          Just repeating ->
+            let newRepeatingTask :: RepeatingTask
+                newRepeatingTask = (const repeating) `mapRepeater` newTaskWithId
+                newRepeatingTasks = newRepeatingTask : repeatingTasks m
+             in m
+                  { newTask = initialTask,
+                    repeatingTasks = newRepeatingTasks
+                  }
    in newModel <# (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel))
 updateModel AddLeisureProjectClicked m =
   let maxId :: LeisureId
@@ -316,6 +288,11 @@ viewNewTaskForm m =
   let nt = newTask m
       importances = (\i -> (showMiso (Importance i), Importance i)) <$> [0, 1, 2]
       timeEstimates = [("<10min", TimeEstimate 10), ("30min", TimeEstimate 30), ("1h", TimeEstimate 60), (">1h", TimeEstimate 120)]
+      makeWeekdayRadio :: Weekday -> Weekday -> [View Action]
+      makeWeekdayRadio curWd wd =
+        [ input_ [class_ "btn-check", type_ "radio", name_ "weekday-repeater", id_ ("repeat-wd-" <> showMiso wd), value_ (showMiso wd), checked_ (curWd == wd), onClick (NewTaskChanged (nt {repeater = Just (EveryWeekday wd)}))],
+          label_ [for_ ("repeat-wd-" <> showMiso wd), class_ "btn btn-outline-primary w-100"] [text (showMiso wd)]
+        ]
       makeImportanceRadio :: (MisoString, Importance) -> [View Action]
       makeImportanceRadio (displayText, value) =
         [ input_ [class_ "btn-check", type_ "radio", name_ "importance", id_ displayText, value_ displayText, checked_ (importance nt == value), onClick (NewTaskChanged (nt {importance = value}))],
@@ -326,6 +303,27 @@ viewNewTaskForm m =
         [ input_ [class_ "btn-check", type_ "radio", name_ "time-estimate", id_ displayValue, value_ displayValue, checked_ (timeEstimate nt == value), onClick (NewTaskChanged (nt {timeEstimate = value}))],
           label_ [for_ displayValue, class_ "btn btn-outline-secondary w-100"] [text displayValue]
         ]
+      formForRepeater = case repeater nt of
+        Nothing ->
+          div_
+            [class_ "form-floating mb-3"]
+            [ input_ [type_ "date", id_ "deadline", class_ "form-control", value_ (maybe "" showMiso (deadline nt)), onInput (\i -> NewTaskChanged $ nt {deadline = parseDay i})],
+              label_ [for_ "deadline"] [text "Deadline"]
+            ]
+        Just (EveryNDays n) ->
+          div_
+            [class_ "form-floating mb-3"]
+            [ input_ [type_ "number", id_ "every-n-days-input", class_ "form-control", value_ (showMiso n), onInput (\i -> NewTaskChanged $ nt {repeater = Just (EveryNDays (read (fromMisoString i)))})],
+              label_ [for_ "every-n-days-input"] [text "Tage"]
+            ]
+        Just (EveryWeekday wd) ->
+          div_
+            [class_ "mb-3"]
+            [ h6_ [] [text "Wochentag"],
+              div_
+                [class_ "btn-group d-flex"]
+                (concatMap (makeWeekdayRadio wd) (enumFromTo Monday Sunday))
+            ]
    in form_
         [class_ "mb-3"]
         [ h3_ [] [viewIcon "plus-lg", text " Neue Aufgabe"],
@@ -338,24 +336,24 @@ viewNewTaskForm m =
           div_ [class_ "btn-group mb-3 d-flex"] (concatMap makeImportanceRadio importances),
           h5_ [] ["Zeitschätzung"],
           div_ [class_ "btn-group mb-3 d-flex"] (concatMap makeTimeEstimateRadio timeEstimates),
+          h5_ [] ["Deadline/Wiederholung"],
           div_
-            [class_ "form-floating mb-3"]
-            [ input_ [type_ "date", id_ "deadline", class_ "form-control", value_ (maybe "" showMiso (deadline nt)), onInput (\i -> NewTaskChanged $ nt {deadline = parseDay i})],
-              label_ [for_ "deadline"] [text "Deadline"]
+            [class_ "btn-group mb-3 d-flex"]
+            [ input_ [class_ "btn-check", type_ "radio", name_ "repeater", id_ "has-deadline", value_ "has-deadline", checked_ (isNothing (repeater nt)), onClick (NewTaskChanged (nt {repeater = Nothing}))],
+              label_ [for_ "has-deadline", class_ "btn btn-outline-secondary w-100"] [text "Nicht wiederholend"],
+              input_ [class_ "btn-check", type_ "radio", name_ "repeater", id_ "every-n-days", value_ "every-n-days", checked_ (maybe False isEveryNDays (repeater nt)), onClick (NewTaskChanged (nt {repeater = Just (EveryNDays 1)}))],
+              label_
+                [for_ "every-n-days", class_ "btn btn-outline-secondary w-100"]
+                [text "Alle N Tage"],
+              input_
+                [class_ "btn-check", type_ "radio", name_ "repeater", id_ "every-weekday", value_ "every-weekday", checked_ (maybe False isEveryWeekday (repeater nt)), onClick (NewTaskChanged (nt {repeater = Just (EveryWeekday Monday)}))],
+              label_ [for_ "every-weekday", class_ "btn btn-outline-secondary w-100"] [text "Bestimmter Wochentag"]
             ],
-          button_ [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked] [viewIcon "save", text " Hinzufügen"]
+          formForRepeater,
+          button_
+            [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked]
+            [viewIcon "save", text " Hinzufügen"]
         ]
-
-weekdayToAllocationTime :: Weekday -> TimeEstimate
-weekdayToAllocationTime Saturday = TimeEstimate 180
-weekdayToAllocationTime Sunday = TimeEstimate 180
-weekdayToAllocationTime _ = TimeEstimate 80
-
-estimateInMinutes :: TimeEstimate -> Int
-estimateInMinutes (TimeEstimate e) = e
-
-showMiso :: Show a => a -> MisoString
-showMiso = toMisoString . show
 
 showDate :: Day -> Day -> MisoString
 showDate today' d
@@ -383,9 +381,47 @@ importanceToIcon (Importance _) = text "🔥"
 viewIcon :: MisoString -> View action
 viewIcon desc = i_ [class_ ("bi-" <> desc)] []
 
-viewTasksListGroup :: Day -> [Task TaskId] -> View Action
+viewRepeatingTasks :: Model -> View Action
+viewRepeatingTasks m =
+  let viewRepeater :: Repeater -> View action
+      viewRepeater r = small_ [class_ "badge rounded-pill text-bg-warning"] [viewRepeater' r]
+      viewRepeater' :: Repeater -> View action
+      viewRepeater' (EveryWeekday wd) = text ("jeden " <> showMiso wd)
+      viewRepeater' (EveryNDays 1) = text ("jeden Tag")
+      viewRepeater' (EveryNDays d) = text ("alle " <> showMiso d <> " Tage")
+      viewRepeatTaskItem :: RepeatingTask -> View Action
+      viewRepeatTaskItem t =
+        div_
+          [class_ "list-group-item"]
+          [ div_
+              [class_ "d-flex w-100 justify-content-between align-items-center"]
+              [ div_
+                  []
+                  [ input_ [type_ "checkbox", class_ "btn-check", id_ (showMiso (taskId t) <> "-check"), onClick (ToggleRepeatingDone (taskId t))],
+                    label_
+                      [for_ (showMiso (taskId t) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
+                      [viewIcon "check-circle"],
+                    span_
+                      [class_ "ms-3 mb-1"]
+                      [importanceToIcon (importance t), text (" " <> title t)]
+                  ],
+                div_
+                  [class_ "hstack gap-1"]
+                  [ viewRepeater (repeater t),
+                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (timeEstimate t))]
+                  ]
+              ]
+          ]
+      notDoneRepeating = filter (\t -> isNothing (completionDay t)) (repeatingTasks m)
+   in div_
+        []
+        [ h3_ [] [viewIcon "arrow-clockwise", text "Wiederkehrende Aufgaben"],
+          div_ [class_ "list-group list-group-flush"] (viewRepeatTaskItem <$> notDoneRepeating)
+        ]
+
+viewTasksListGroup :: Day -> [RegularTask] -> View Action
 viewTasksListGroup today' all =
-  let viewTaskItem :: Task TaskId -> View Action
+  let viewTaskItem :: RegularTask -> View Action
       viewTaskItem t =
         div_
           [class_ "list-group-item"]
@@ -413,61 +449,6 @@ viewTasksListGroup today' all =
           ]
    in div_ [class_ "list-group list-group-flush"] (viewTaskItem <$> all)
 
-removeIndex :: Int -> [a] -> [a]
-removeIndex i a = take i a ++ drop (i + 1) a
-
-removeRandomElement :: [a] -> SimannealState ([a], [a]) (a, [a])
-removeRandomElement xs = do
-  randomIndex <- randomRS (0, length xs - 1)
-  pure (xs !! randomIndex, removeIndex randomIndex xs)
-
-annealTasks :: forall a. Seed -> Day -> Weekday -> Float -> [Task a] -> [Task a]
-annealTasks seed today' weekday' spentMinutes allTasks =
-  let taskImportanceSum :: [Task a] -> Float
-      taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
-      taskUrgency :: Task a -> Float
-      taskUrgency t = case deadline t of
-        Nothing -> 0.0
-        Just d ->
-          min 3.0 (fromIntegral (diffDays d today'))
-      taskUrgencySum :: [Task a] -> Float
-      taskUrgencySum ts = sum (taskUrgency <$> ts)
-      allocated :: Float
-      allocated = max 0 (fromIntegral (estimateInMinutes (weekdayToAllocationTime weekday')) - spentMinutes)
-      totalEstimate :: Float
-      totalEstimate = taskEstimateSum allTasks
-      maxDistanceToAllocated :: Float
-      maxDistanceToAllocated = max allocated totalEstimate
-      distance :: Float -> Float -> Float
-      distance x y = abs (x - y)
-      (baseTasks, remainingTasks) = partition (\t -> deadline t == Just today') allTasks
-      taskEnergy :: ([Task a], [Task a]) -> Energy
-      taskEnergy (ts, _) =
-        let closeToAllocated :: Float
-            closeToAllocated = (distance allocated (taskEstimateSum (ts <> baseTasks))) / maxDistanceToAllocated
-            sumImportance = taskImportanceSum ts
-            sumUrgency = taskUrgencySum ts
-         in Energy (closeToAllocated - 0.05 * sumImportance - 0.05 * sumUrgency)
-      mutateTasks :: ([Task a], [Task a]) -> SimannealState ([Task a], [Task a]) ([Task a], [Task a])
-      mutateTasks (chosenTasks, openTasks) = do
-        removeOrAdd :: Int <- randomRS (1, 100)
-        let thisIterationRemoves = removeOrAdd <= 50
-        if length chosenTasks > 1 && thisIterationRemoves
-          then do
-            (removedTask, newChosenTasks) <- removeRandomElement chosenTasks
-            pure (newChosenTasks, removedTask : openTasks)
-          else
-            if length openTasks > 1
-              then do
-                (removedTask, newOpenTasks) <- removeRandomElement openTasks
-                pure (removedTask : chosenTasks, newOpenTasks)
-              else pure (chosenTasks, openTasks)
-   in if length allTasks <= 1 || null remainingTasks
-        then allTasks
-        else
-          let solution = simanneal seed (remainingTasks, []) mutateTasks taskEnergy 100.0 0.01 0.5
-           in (baseTasks <> fst solution)
-
 buildProgressBar :: [(Int, Maybe MisoString)] -> View action
 buildProgressBar parts =
   let sumTotal = fromIntegral (sum (fst <$> parts))
@@ -481,7 +462,7 @@ buildProgressBar parts =
       makePart (part, Just background) = div_ [class_ ("progress-bar " <> background), style_ (M.singleton "width" (makePercentageString part))] [text (showMiso part <> "min")]
    in div_ [class_ "progress"] (makePart <$> parts)
 
-viewProgressBar :: Day -> Weekday -> [Task TaskId] -> View Action
+viewProgressBar :: Day -> Weekday -> [RegularTask] -> View Action
 viewProgressBar today' weekday' all =
   let done :: Int
       done = estimateInMinutes (foldMap timeEstimate (filter (\t -> completionDay t == Just today') all))
@@ -492,7 +473,7 @@ viewProgressBar today' weekday' all =
       leftover = max 0 (allocated - done)
       description =
         if leftover > 0
-          then small_ [] [strong_ [] [text (showMiso leftover <> "min")], text " übrig"]
+          then small_ [] [strong_ [] [text (showMiso leftover <> "min")], text (" übrig (" <> showMiso done <> "min fertig)")]
           else
             if overhang > 0
               then small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
@@ -569,14 +550,14 @@ viewModelLeisure m =
 
 viewModelWork :: Model -> View Action
 viewModelWork m =
-  let uncompletedTasks :: [Task TaskId]
+  let uncompletedTasks :: [RegularTask]
       uncompletedTasks = filter (\t -> maybe True id ((>= today m) <$> completionDay t)) (tasks m)
       taskIdsDoneToday :: S.Set TaskId
       taskIdsDoneToday = S.fromList (taskId <$> (filter (\t -> completionDay t == Just (today m)) uncompletedTasks))
       annealedIdsAndDoneToday :: S.Set TaskId
       annealedIdsAndDoneToday = annealedTasks m <> taskIdsDoneToday
       (todayTasks, remainingTasks) = partition (\t -> taskId t `S.member` annealedIdsAndDoneToday) uncompletedTasks
-      deadlineDays :: Task t -> Integer
+      deadlineDays :: Task idType repeaterType -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 4
         Just d ->
@@ -605,7 +586,10 @@ viewModelWork m =
                 (today m)
                 sortedRemainingTasks,
           hr_ [],
-          viewNewTaskForm m
+          viewNewTaskForm
+            m,
+          hr_ [],
+          viewRepeatingTasks m
         ]
 
 #ifndef __GHCJS__

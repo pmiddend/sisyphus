@@ -5,9 +5,20 @@ category:            Web
 build-type:          Simple
 cabal-version:       >=1.10
 
+test-suite main-tests
+  main-is: test.hs
+
+  type: exitcode-stdio-1.0
+
+  build-depends: hspec, base, mtl, transformers, random, miso, time, containers, aeson
+  other-modules:       Simanneal, Task
+  hs-source-dirs: src, tests
+  default-language: Haskell2010
+
 executable app
   main-is:             Main.hs
-  other-modules:       Simanneal
+  other-modules:       Simanneal, Task
+  hs-source-dirs: src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   ghcjs-options:
     -dedupe
