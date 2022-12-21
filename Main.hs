@@ -73,6 +73,9 @@ instance FromJSON Importance where
 instance FromJSON TaskId where
   parseJSON = withScientific "TaskId" (pure . TaskId . floor)
 
+instance FromJSON LeisureId where
+  parseJSON = withScientific "LeisureId" (pure . LeisureId . floor)
+
 newtype TimeEstimate = TimeEstimate Int deriving (Eq, Ord)
 
 instance Semigroup TimeEstimate where
@@ -121,10 +124,20 @@ newtype TaskId = TaskId Int deriving (Eq, Show, Ord)
 increaseTaskId :: TaskId -> TaskId
 increaseTaskId (TaskId i) = TaskId (i + 1)
 
-newtype LeisureProject = LeisureProject
-  { leisureTitle :: MisoString
+increaseLeisureId :: LeisureId -> LeisureId
+increaseLeisureId (LeisureId i) = LeisureId (i + 1)
+
+newtype LeisureId = LeisureId Int deriving (Eq, Show, Ord)
+
+data LeisureProject a = LeisureProject
+  { leisureTitle :: MisoString,
+    leisureId :: a
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Generic, Functor)
+
+instance FromJSON a => FromJSON (LeisureProject a)
+
+instance ToJSON a => ToJSON (LeisureProject a)
 
 data DisplayMode = DisplayWork | DisplayLeisure deriving (Show, Eq)
 
@@ -136,21 +149,26 @@ data Model = Model
     today :: Day,
     weekday :: Weekday,
     seed :: Int,
-    leisureProjects :: [LeisureProject],
+    leisureProjects :: [LeisureProject LeisureId],
+    newLeisureProject :: LeisureProject (),
     displayMode :: DisplayMode
   }
   deriving (Show, Generic, Eq)
 
 localStorageKey :: MisoString
-localStorageKey = "v4"
+localStorageKey = "v5"
 
 data LocalStorageModel = LocalStorageModel
-  { lsTasks :: [Task TaskId]
+  { lsTasks :: [Task TaskId],
+    lsLeisureProjects :: [LeisureProject LeisureId]
   }
   deriving (Generic, Show, Eq)
 
 instance ToJSON TaskId where
   toJSON (TaskId i) = toJSON i
+
+instance ToJSON LeisureId where
+  toJSON (LeisureId i) = toJSON i
 
 instance FromJSON LocalStorageModel
 
@@ -163,12 +181,15 @@ data Action
   | Init
   | IncreaseSeed
   | AddTaskClicked
+  | AddLeisureProjectClicked
+  | ToggleLeisureProject LeisureId
   | ToggleDone TaskId
   | ToggleMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
   | CurrentWeekDayReceived Int
   | NewTaskChanged (Task ())
+  | NewLeisureProjectChanged (LeisureProject ())
   deriving (Show, Eq)
 
 initialTask :: Task ()
@@ -193,11 +214,15 @@ initialModel =
       weekday = Monday,
       seed = 14,
       displayMode = DisplayWork,
-      leisureProjects = mempty
+      leisureProjects = mempty,
+      newLeisureProject = initialLeisureProject
     }
 
+initialLeisureProject :: LeisureProject ()
+initialLeisureProject = LeisureProject {leisureTitle = "", leisureId = ()}
+
 modelToLocalStorage :: Model -> LocalStorageModel
-modelToLocalStorage (Model {tasks = tasks}) = LocalStorageModel tasks
+modelToLocalStorage (Model {tasks = tasks, leisureProjects = leisureProjects}) = LocalStorageModel tasks leisureProjects
 
 setLocalStorageFromModel :: Model -> JSM Action
 setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
@@ -229,6 +254,9 @@ parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
 updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekday m) (tasks m)})
+updateModel (ToggleLeisureProject projectId) m =
+  let newModel = m {leisureProjects = filter (\lp -> leisureId lp /= projectId) (leisureProjects m)}
+   in newModel <# setLocalStorageFromModel newModel
 updateModel ToggleMode m =
   noEff
     ( m
@@ -241,7 +269,7 @@ updateModel ToggleMode m =
 updateModel (LocalStorageReceived l) m =
   case l of
     Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
-    Right v -> noEff (m {tasks = lsTasks v, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) (lsTasks v)})
+    Right v -> noEff (m {leisureProjects = lsLeisureProjects v, tasks = lsTasks v, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) (lsTasks v)})
 updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay, CurrentWeekDayReceived <$> getCurrentWeekday]
 updateModel Nop m = noEff m
 updateModel (CurrentWeekDayReceived d) m =
@@ -256,6 +284,7 @@ updateModel (CurrentDayReceived d) m =
       Just todayParsed -> noEff (m {today = todayParsed})
 updateModel LocalStorageUpdated m = noEff m
 updateModel (NewTaskChanged nt) m = noEff (m {newTask = nt})
+updateModel (NewLeisureProjectChanged lp) m = noEff (m {newLeisureProject = lp})
 updateModel (ToggleDone tid) m =
   let newModel = updateTask m tid $ \t -> case completionDay t of
         Nothing -> t {completionDay = Just (today m)}
@@ -270,6 +299,16 @@ updateModel AddTaskClicked m =
       addedTask = increaseTaskId maxId <$ newTask m
       newTasks = addedTask : tasks m
       newModel = m {newTask = initialTask, tasks = newTasks, annealedTasks = annealTasksInModel (seed m) (today m) (weekday m) newTasks}
+   in newModel <# (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel))
+updateModel AddLeisureProjectClicked m =
+  let maxId :: LeisureId
+      maxId = case leisureProjects m of
+        [] -> LeisureId 0
+        lps -> leisureId (maximumBy (comparing leisureId) lps)
+      addedLeisureProject :: LeisureProject LeisureId
+      addedLeisureProject = increaseLeisureId maxId <$ newLeisureProject m
+      newLeisureProjects = addedLeisureProject : leisureProjects m
+      newModel = m {newLeisureProject = initialLeisureProject, leisureProjects = newLeisureProjects}
    in newModel <# (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel))
 
 viewNewTaskForm :: Model -> View Action
@@ -289,7 +328,8 @@ viewNewTaskForm m =
         ]
    in form_
         [class_ "mb-3"]
-        [ div_
+        [ h3_ [] [viewIcon "plus-lg", text " Neue Aufgabe"],
+          div_
             [class_ "form-floating mb-3"]
             [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (title nt), onInput (\i -> NewTaskChanged $ nt {title = i})],
               label_ [for_ "title"] [text "Titel der Aufgabe"]
@@ -479,6 +519,56 @@ viewModeSwitcher m =
 
 viewModel :: Model -> View Action
 viewModel m =
+  let content = case displayMode m of
+        DisplayWork -> viewModelWork m
+        DisplayLeisure -> viewModelLeisure m
+   in div_
+        [class_ "container"]
+        ( [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
+            link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet"],
+            header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] ["⏰ Sisyphus"]],
+            viewModeSwitcher m,
+            if statusMessages m /= []
+              then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
+              else text ""
+          ]
+            ++ [content]
+        )
+
+viewModelLeisure :: Model -> View Action
+viewModelLeisure m =
+  let viewNewLeisureForm nt =
+        form_
+          []
+          [ h3_ [] [viewIcon "plus-lg", text " Neues Projekt"],
+            div_
+              [class_ "form-floating mb-3"]
+              [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (leisureTitle nt), onInput (\i -> NewLeisureProjectChanged $ nt {leisureTitle = i})],
+                label_ [for_ "title"] [text "Titel des Projekts"]
+              ],
+            button_ [type_ "button", class_ "btn btn-primary w-100", onClick AddLeisureProjectClicked] [viewIcon "save", text " Hinzufügen"]
+          ]
+      viewLeisureProject :: LeisureProject LeisureId -> View Action
+      viewLeisureProject p =
+        div_
+          [class_ "list-group-item"]
+          [ div_
+              [class_ "hstack gap-3"]
+              [ button_
+                  [ type_ "button",
+                    class_ "btn btn-outline-secondary btn-sm",
+                    onClick (ToggleLeisureProject (leisureId p))
+                  ]
+                  [viewIcon "check-circle"],
+                span_ [] [text (leisureTitle p)]
+              ]
+          ]
+   in div_
+        []
+        [h3_ [] [text "🌴 Deine Freizeitprojekte"], div_ [class_ "list-group list-group-flush"] (viewLeisureProject <$> leisureProjects m), viewNewLeisureForm (newLeisureProject m)]
+
+viewModelWork :: Model -> View Action
+viewModelWork m =
   let uncompletedTasks :: [Task TaskId]
       uncompletedTasks = filter (\t -> maybe True id ((>= today m) <$> completionDay t)) (tasks m)
       taskIdsDoneToday :: S.Set TaskId
@@ -499,17 +589,8 @@ viewModel m =
           (comparing deadlineDays <> comparing (Down . importance) <> comparing (Down . timeEstimate))
           remainingTasks
    in div_
-        [class_ "container"]
-        [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
-          link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet"],
-          header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] ["⏰ Sisyphus"]],
-          viewModeSwitcher m,
-          if statusMessages m /= []
-            then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
-            else text "",
-          viewNewTaskForm m,
-          hr_ [],
-          viewProgressBar (today m) (weekday m) (tasks m),
+        []
+        [ viewProgressBar (today m) (weekday m) (tasks m),
           div_
             [class_ "d-flex justify-content-between align-items-center"]
             [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> todayTasks)) <> "min)"]
@@ -517,7 +598,14 @@ viewModel m =
             ],
           viewTasksListGroup (today m) (sortBy (comparing (Down . importance) <> comparing title) todayTasks),
           if null remainingTasks then text "" else h5_ [] [text "Andere Aufgaben"],
-          if null remainingTasks then text "" else viewTasksListGroup (today m) sortedRemainingTasks
+          if null remainingTasks
+            then text ""
+            else
+              viewTasksListGroup
+                (today m)
+                sortedRemainingTasks,
+          hr_ [],
+          viewNewTaskForm m
         ]
 
 #ifndef __GHCJS__
