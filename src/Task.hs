@@ -5,7 +5,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
+
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Task
@@ -216,7 +216,7 @@ annealTasksInModel seed' today' timeBudgetForToday tasks =
           today'
           timeBudgetForToday
           (taskEstimateSum (filter (\t -> completionDay t == Just today') tasks))
-          (filter (\t -> isNothing (completionDay t)) tasks)
+          (filter (isNothing . completionDay) tasks)
     )
 
 estimateInMinutes :: TimeEstimate -> Int
@@ -268,7 +268,7 @@ annealTasks seed today' timeBudgetForToday spentMinutes allTasks =
             (removedTask, newChosenTasks) <- removeRandomElement chosenTasks
             pure (newChosenTasks, removedTask : openTasks)
           else
-            if length openTasks >= 1
+            if not (null openTasks)
               then do
                 (removedTask, newOpenTasks) <- removeRandomElement openTasks
                 pure (removedTask : chosenTasks, newOpenTasks)

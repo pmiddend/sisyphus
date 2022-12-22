@@ -7,6 +7,7 @@ module Simanneal (simanneal, SimannealState, Energy (..), Temperature (..), rand
 import Control.Monad (when)
 import Control.Monad.State.Class (MonadState, get, put)
 import Control.Monad.Trans.State (State, runState)
+import Data.Maybe (fromMaybe)
 import System.Random (Random, StdGen, mkStdGen, randomR)
 
 newtype Temperature = Temperature Float deriving (Fractional, Num, Eq, Ord)
@@ -44,9 +45,7 @@ simanneal ::
   s
 simanneal seed startState chooseNeighbor energy startTemp tempDiff finalTemp =
   let (result, finalState) = runState (simanneal'' startState (energy startState) chooseNeighbor energy startTemp tempDiff finalTemp) (SimannealData (mkStdGen seed) Nothing Nothing)
-   in case bestSolution finalState of
-        Nothing -> result
-        Just finalSol -> finalSol
+   in fromMaybe result (bestSolution finalState)
 
 simanneal'' ::
   forall s.
@@ -62,8 +61,7 @@ simanneal'' startState startEnergy chooseNeighbor energy (Temperature startTemp)
   where
     simanneal''' temp currentState currentEnergy =
       if temp <= finalTemp
-        then do
-          pure currentState
+        then pure currentState
         else do
           newNeighbor <- chooseNeighbor currentState
           let newNeighborEnergy = energy newNeighbor
@@ -73,7 +71,7 @@ simanneal'' startState startEnergy chooseNeighbor energy (Temperature startTemp)
             then do
               s <- get
               let previousBest = bestSolutionEnergy s
-              when (maybe True id ((> newNeighborEnergy) <$> previousBest)) $
+              when (Data.Maybe.fromMaybe True ((> newNeighborEnergy) <$> previousBest)) $
                 put (s {bestSolutionEnergy = Just newNeighborEnergy, bestSolution = Just newNeighbor})
               simanneal''' nextTemp newNeighbor newNeighborEnergy
             else do

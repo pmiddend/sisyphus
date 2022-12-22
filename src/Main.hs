@@ -1,5 +1,4 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
@@ -125,7 +124,7 @@ initialLeisureProject :: LeisureProject ()
 initialLeisureProject = LeisureProject {leisureTitle = "", leisureId = ()}
 
 modelToLocalStorage :: Model -> LocalStorageModel
-modelToLocalStorage (Model {tasks = tasks, repeatingTasks = repeatingTasks, leisureProjects = leisureProjects}) = LocalStorageModel tasks repeatingTasks leisureProjects
+modelToLocalStorage Model {tasks = tasks, repeatingTasks = repeatingTasks, leisureProjects = leisureProjects} = LocalStorageModel tasks repeatingTasks leisureProjects
 
 setLocalStorageFromModel :: Model -> JSM Action
 setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
@@ -133,13 +132,13 @@ setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage local
 updateTask :: Model -> TaskId -> (RegularTask -> RegularTask) -> Model
 updateTask m tid f =
   let possiblyEditTask t = if taskId t == tid then f t else t
-      newTasks = foldr (\t prevTasks -> possiblyEditTask t : prevTasks) [] (tasks m)
+      newTasks = possiblyEditTask <$> (tasks m)
    in m {tasks = newTasks}
 
 updateRepeatingTask :: Model -> TaskId -> (RepeatingTask -> RepeatingTask) -> Model
 updateRepeatingTask m tid f =
   let possiblyEditTask t = if taskId t == tid then f t else t
-      newTasks = foldr (\t prevTasks -> possiblyEditTask t : prevTasks) [] (repeatingTasks m)
+      newTasks = possiblyEditTask <$> (repeatingTasks m)
    in m {repeatingTasks = newTasks}
 
 parseDay :: MisoString -> Maybe Day
@@ -179,7 +178,7 @@ createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
          in if hasOpenCandidate
               then []
               else
-                let lastClosing = safeMaximum (mapMaybe (\t -> if repeater t == Just (taskId rt) then (completionDay t) else Nothing) regularTasks)
+                let lastClosing = safeMaximum (mapMaybe (\t -> if repeater t == Just (taskId rt) then completionDay t else Nothing) regularTasks)
                  in case lastClosing of
                       Nothing -> createTask rt
                       Just lc ->
@@ -256,7 +255,7 @@ updateModel AddTaskClicked m =
         case repeater (newTask m) of
           Nothing ->
             let newNonrepeatingTask :: RegularTask
-                newNonrepeatingTask = (const Nothing) `mapRepeater` newTaskWithId
+                newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
                 newTasks = newNonrepeatingTask : tasks m
              in m
                   { newTask = initialTask,
@@ -265,7 +264,7 @@ updateModel AddTaskClicked m =
                   }
           Just repeating ->
             let newRepeatingTask :: RepeatingTask
-                newRepeatingTask = (const repeating) `mapRepeater` newTaskWithId
+                newRepeatingTask = const repeating `mapRepeater` newTaskWithId
                 newRepeatingTasks = newRepeatingTask : repeatingTasks m
              in m
                   { newTask = initialTask,
@@ -387,7 +386,7 @@ viewRepeatingTasks m =
       viewRepeater r = small_ [class_ "badge rounded-pill text-bg-warning"] [viewRepeater' r]
       viewRepeater' :: Repeater -> View action
       viewRepeater' (EveryWeekday wd) = text ("jeden " <> showMiso wd)
-      viewRepeater' (EveryNDays 1) = text ("jeden Tag")
+      viewRepeater' (EveryNDays 1) = text "jeden Tag"
       viewRepeater' (EveryNDays d) = text ("alle " <> showMiso d <> " Tage")
       viewRepeatTaskItem :: RepeatingTask -> View Action
       viewRepeatTaskItem t =
@@ -412,7 +411,7 @@ viewRepeatingTasks m =
                   ]
               ]
           ]
-      notDoneRepeating = filter (\t -> isNothing (completionDay t)) (repeatingTasks m)
+      notDoneRepeating = filter (isNothing . completionDay) (repeatingTasks m)
    in div_
         []
         [ h3_ [] [viewIcon "arrow-clockwise", text "Wiederkehrende Aufgaben"],
@@ -464,20 +463,17 @@ buildProgressBar parts =
 
 viewProgressBar :: Day -> Weekday -> [RegularTask] -> View Action
 viewProgressBar today' weekday' all =
-  let done :: Int
+  let description
+        | leftover > 0 = small_ [] [strong_ [] [text (showMiso leftover <> "min")], text (" übrig (" <> showMiso done <> "min fertig)")]
+        | overhang > 0 = small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
+        | otherwise = text ""
+      done :: Int
       done = estimateInMinutes (foldMap timeEstimate (filter (\t -> completionDay t == Just today') all))
       allocated :: Int
       allocated = estimateInMinutes (weekdayToAllocationTime weekday')
       overhang :: Int
       overhang = max 0 (done - allocated)
       leftover = max 0 (allocated - done)
-      description =
-        if leftover > 0
-          then small_ [] [strong_ [] [text (showMiso leftover <> "min")], text (" übrig (" <> showMiso done <> "min fertig)")]
-          else
-            if overhang > 0
-              then small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
-              else text ""
    in div_
         [class_ "mb-3"]
         [ buildProgressBar
@@ -551,9 +547,9 @@ viewModelLeisure m =
 viewModelWork :: Model -> View Action
 viewModelWork m =
   let uncompletedTasks :: [RegularTask]
-      uncompletedTasks = filter (\t -> maybe True id ((>= today m) <$> completionDay t)) (tasks m)
+      uncompletedTasks = filter (\t -> Data.Maybe.fromMaybe True ((>= today m) <$> completionDay t)) (tasks m)
       taskIdsDoneToday :: S.Set TaskId
-      taskIdsDoneToday = S.fromList (taskId <$> (filter (\t -> completionDay t == Just (today m)) uncompletedTasks))
+      taskIdsDoneToday = S.fromList (taskId <$> filter (\t -> completionDay t == Just (today m)) uncompletedTasks)
       annealedIdsAndDoneToday :: S.Set TaskId
       annealedIdsAndDoneToday = annealedTasks m <> taskIdsDoneToday
       (todayTasks, remainingTasks) = partition (\t -> taskId t `S.member` annealedIdsAndDoneToday) uncompletedTasks
