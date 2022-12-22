@@ -7,5 +7,5 @@ let
   '';
 in
 dev.env.overrideAttrs (old: {
-  buildInputs = old.buildInputs ++ [ reload-script pkgs.haskell.packages.ghc865.hlint pkgs.haskell.packages.ghc865.apply-refact ];
+  buildInputs = old.buildInputs ++ [ reload-script pkgs.haskell.packages.ghc865.hlint pkgs.haskell.packages.ghc865.apply-refact pkgs.haskell.packages.ghc865.cabal-install ];
 })
