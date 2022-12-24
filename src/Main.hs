@@ -8,6 +8,9 @@
 
 module Main (main) where
 
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Monad (forever, void)
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
 import Data.List (maximumBy, partition, sortBy)
 import qualified Data.Map as M
@@ -84,6 +87,7 @@ instance ToJSON LocalStorageModel
 data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | Nop
+  | RequestRefresh
   | Init
   | ToggleAdaptAllocation
   | CancelAdaptAllocation
@@ -166,11 +170,14 @@ weekdayAllocationTime m =
         else weekdayToAllocationTime (weekday m)
 
 reanneal :: Model -> Model
-reanneal m = m {annealedTasks = annealTasksInModel (seed m) (today m) (weekdayAllocationTime m) (tasks m)}
+reanneal m =
+  let newTasks = tasks m <> createRepeatingTasks (today m) (tasks m) (repeatingTasks m)
+   in m {annealedTasks = annealTasksInModel (seed m) (today m) (weekdayAllocationTime m) newTasks}
 
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
 updateModel (AdaptAllocationChange newValue) m = noEff (m {explicitAllocationChanging = Just newValue})
+updateModel RequestRefresh m = m <# (CurrentDayReceived <$> getCurrentDay)
 updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekdayAllocationTime m) (tasks m)})
 updateModel CancelAdaptAllocation m =
   noEff (m {explicitAllocationChanging = Nothing})
@@ -203,16 +210,15 @@ updateModel (LocalStorageReceived l) m =
   case l of
     Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
     Right v ->
-      let tasksAndRepeated = lsTasks v <> createRepeatingTasks (today m) (lsTasks v) (lsRepeatingTasks v)
-       in noEff
-            ( reanneal $
-                m
-                  { leisureProjects = lsLeisureProjects v,
-                    tasks = tasksAndRepeated,
-                    repeatingTasks = lsRepeatingTasks v,
-                    explicitAllocation = lsExplicitAllocation v
-                  }
-            )
+      noEff
+        ( reanneal $
+            m
+              { leisureProjects = lsLeisureProjects v,
+                tasks = lsTasks v,
+                repeatingTasks = lsRepeatingTasks v,
+                explicitAllocation = lsExplicitAllocation v
+              }
+        )
 updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay]
 updateModel Nop m = noEff m
 updateModel (CurrentDayReceived d) m =
@@ -220,7 +226,7 @@ updateModel (CurrentDayReceived d) m =
     Left _ -> noEff (m {statusMessages = "couldn't parse current day string" : statusMessages m})
     Right ddecoded -> case parseDay ddecoded of
       Nothing -> noEff (m {statusMessages = toMisoString ("couldn't parse \"" <> ddecoded <> "\"") : statusMessages m})
-      Just todayParsed -> noEff (m {today = todayParsed})
+      Just todayParsed -> noEff (reanneal $ m {today = todayParsed})
 updateModel LocalStorageUpdated m = noEff m
 updateModel (NewTaskChanged nt) m = noEff (m {newTask = nt})
 updateModel (NewLeisureProjectChanged lp) m = noEff (m {newLeisureProject = lp})
@@ -631,6 +637,14 @@ main = runApp $ startApp App {..}
     update = updateModel
     view = viewModel
     events = defaultEvents
-    subs = []
+    subs = [timer]
     mountPoint = Nothing
     logLevel = Off
+    refreshAction :: Sink Action -> IO ()
+    refreshAction sink =
+      forever $ do
+        let refreshSeconds = 30
+        threadDelay (1000 * 1000 * refreshSeconds)
+        sink RequestRefresh
+    timer :: Sub Action
+    timer sink = liftIO $ void $ forkIO $ refreshAction sink
