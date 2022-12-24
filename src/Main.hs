@@ -33,31 +33,28 @@ import           Language.Javascript.JSaddle.Warp as JSaddle
 #ifndef __GHCJS__
 getCurrentDay :: JSM MisoString
 getCurrentDay = pure "2022-12-13"
-
-getCurrentWeekday :: JSM Int
-getCurrentWeekday = pure 1
 #else
 foreign import javascript unsafe "$r = new Date().toISOString().substr(0,10)"
   getCurrentDay :: JSM MisoString
-
-foreign import javascript unsafe "$r = new Date().getDay()"
-  getCurrentWeekday :: JSM Int
 #endif
 
 data Model = Model
   { newTask :: Task () (Maybe Repeater),
     tasks :: [RegularTask],
     repeatingTasks :: [RepeatingTask],
+    remainingTasksOpened :: Bool,
     annealedTasks :: S.Set TaskId,
     statusMessages :: [MisoString],
     today :: Day,
-    weekday :: Weekday,
     seed :: Int,
     leisureProjects :: [LeisureProject LeisureId],
     newLeisureProject :: LeisureProject (),
     displayMode :: DisplayMode
   }
   deriving (Show, Generic, Eq)
+
+weekday :: Model -> Weekday
+weekday = calculateWeekday . today
 
 localStorageKey :: MisoString
 localStorageKey = "v6"
@@ -78,6 +75,7 @@ data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | Nop
   | Init
+  | ToggleRemainingTasksOpened
   | IncreaseSeed
   | AddTaskClicked
   | AddLeisureProjectClicked
@@ -87,7 +85,6 @@ data Action
   | ToggleMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
-  | CurrentWeekDayReceived Int
   | NewTaskChanged (Task () (Maybe Repeater))
   | NewLeisureProjectChanged (LeisureProject ())
   deriving (Show, Eq)
@@ -112,8 +109,8 @@ initialModel =
       repeatingTasks = mempty,
       annealedTasks = mempty,
       statusMessages = mempty,
+      remainingTasksOpened = False,
       today = toEnum 0,
-      weekday = Monday,
       seed = 15,
       displayMode = DisplayWork,
       leisureProjects = mempty,
@@ -196,6 +193,7 @@ createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
 updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekdayToAllocationTime (weekday m)) (tasks m)})
+updateModel ToggleRemainingTasksOpened m = noEff (m {remainingTasksOpened = not (remainingTasksOpened m)})
 updateModel (ToggleLeisureProject projectId) m =
   let newModel = m {leisureProjects = filter (\lp -> leisureId lp /= projectId) (leisureProjects m)}
    in newModel <# setLocalStorageFromModel newModel
@@ -221,12 +219,8 @@ updateModel (LocalStorageReceived l) m =
                   annealedTasks = annealTasksInModel (seed m) (today m) (weekdayToAllocationTime (weekday m)) tasksAndRepeated
                 }
             )
-updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay, CurrentWeekDayReceived <$> getCurrentWeekday]
+updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay]
 updateModel Nop m = noEff m
-updateModel (CurrentWeekDayReceived d) m =
-  case fromJsWeekday d of
-    Nothing -> noEff (m {statusMessages = "couldn't parse weekday number: " <> showMiso d : statusMessages m})
-    Just wd -> noEff (m {weekday = wd})
 updateModel (CurrentDayReceived d) m =
   case fromMisoStringEither d of
     Left _ -> noEff (m {statusMessages = "couldn't parse current day string" : statusMessages m})
@@ -324,7 +318,7 @@ viewNewTaskForm m =
                 (concatMap (makeWeekdayRadio wd) (enumFromTo Monday Sunday))
             ]
    in form_
-        [class_ "mb-3"]
+        [class_ "mb-3 mt-3"]
         [ h3_ [] [viewIcon "plus-lg", text " Neue Aufgabe"],
           div_
             [class_ "form-floating mb-3"]
@@ -413,8 +407,8 @@ viewRepeatingTasks m =
           ]
       notDoneRepeating = filter (isNothing . completionDay) (repeatingTasks m)
    in div_
-        []
-        [ h3_ [] [viewIcon "arrow-clockwise", text "Wiederkehrende Aufgaben"],
+        [class_ "mt-3"]
+        [ h3_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
           div_ [class_ "list-group list-group-flush"] (viewRepeatTaskItem <$> notDoneRepeating)
         ]
 
@@ -464,7 +458,7 @@ buildProgressBar parts =
 viewProgressBar :: Day -> Weekday -> [RegularTask] -> View Action
 viewProgressBar today' weekday' all =
   let description
-        | leftover > 0 = small_ [] [strong_ [] [text (showMiso leftover <> "min")], text (" übrig (" <> showMiso done <> "min fertig)")]
+        | leftover > 0 = small_ [] [strong_ [] [text (showMiso leftover <> "min"), text " übrig"]]
         | overhang > 0 = small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
         | otherwise = text ""
       done :: Int
@@ -565,6 +559,21 @@ viewModelWork m =
         sortBy
           (comparing deadlineDays <> comparing (Down . importance) <> comparing (Down . timeEstimate))
           remainingTasks
+      viewRemainingTasks =
+        div_
+          [class_ "accordion accordion-flush"]
+          [ div_
+              [class_ "accordion-item"]
+              [ h2_
+                  [class_ "accordion-header"]
+                  [ button_ [class_ ("accordion-button" <> if remainingTasksOpened m then "" else " collapsed"), type_ "button", onClick ToggleRemainingTasksOpened] [text "Weitere Aufgaben"]
+                  ],
+                div_
+                  [class_ ("accordion-collapse collapse" <> if remainingTasksOpened m then " show" else "")]
+                  [ div_ [class_ "accordion-body"] [viewTasksListGroup (today m) sortedRemainingTasks]
+                  ]
+              ]
+          ]
    in div_
         []
         [ viewProgressBar (today m) (weekday m) (tasks m),
@@ -574,17 +583,8 @@ viewModelWork m =
             -- div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
             ],
           viewTasksListGroup (today m) (sortBy (comparing (Down . importance) <> comparing title) todayTasks),
-          if null remainingTasks then text "" else h5_ [] [text "Andere Aufgaben"],
-          if null remainingTasks
-            then text ""
-            else
-              viewTasksListGroup
-                (today m)
-                sortedRemainingTasks,
-          hr_ [],
-          viewNewTaskForm
-            m,
-          hr_ [],
+          if null remainingTasks then text "" else viewRemainingTasks,
+          viewNewTaskForm m,
           viewRepeatingTasks m
         ]
 
