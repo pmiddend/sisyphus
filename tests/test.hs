@@ -29,8 +29,81 @@ noDeadline title' importance' timeEstimate' tid' =
       repeater = Nothing
     }
 
+dailyTask :: RepeatingTask
+dailyTask =
+  Task
+    { title = "daily",
+      importance = notImportant,
+      deadline = Nothing,
+      timeEstimate = tenMin,
+      completionDay = Nothing,
+      taskId = TaskId 1,
+      repeater = EveryNDays 1
+    }
+
+everyDays :: RepeatingTask
+everyDays =
+  Task
+    { title = "everydays",
+      importance = notImportant,
+      deadline = Nothing,
+      timeEstimate = tenMin,
+      completionDay = Nothing,
+      taskId = TaskId 1,
+      repeater = EveryNDays 3
+    }
+
 main :: IO ()
 main = hspec $ do
+  describe "createRepeatingTasks" $ do
+    describe "daily" $ do
+      let dailyTask =
+            Task
+              { title = "daily",
+                importance = notImportant,
+                deadline = Nothing,
+                timeEstimate = tenMin,
+                completionDay = Nothing,
+                taskId = TaskId 1,
+                repeater = EveryNDays 1
+              }
+      it "should create task" $ do
+        createRepeatingTasks (toEnum 0) mempty [dailyTask] `shouldBe` [dailyTask {repeater = Just (taskId dailyTask)}]
+      it "should not create task twice" $ do
+        let todaysTasks = createRepeatingTasks (toEnum 0) mempty [dailyTask]
+        createRepeatingTasks (toEnum 1) todaysTasks [dailyTask] `shouldBe` []
+      it "should recreate task once done" $ do
+        let todaysTasks = createRepeatingTasks (toEnum 0) mempty [dailyTask]
+            completedToday = (\t -> t {completionDay = Just (toEnum 0)}) <$> todaysTasks
+        createRepeatingTasks (toEnum 1) completedToday [dailyTask] `shouldNotBe` []
+    describe "every n days" $ do
+      let everyDays =
+            Task
+              { title = "everydays",
+                importance = notImportant,
+                deadline = Nothing,
+                timeEstimate = tenMin,
+                completionDay = Nothing,
+                taskId = TaskId 1,
+                repeater = EveryNDays 3
+              }
+      it "should create task" $ do
+        createRepeatingTasks
+          (toEnum 0)
+          mempty
+          [everyDays]
+          `shouldBe` [everyDays {repeater = Just (taskId everyDays)}]
+      it "should not create task twice" $ do
+        let todaysTasks = createRepeatingTasks (toEnum 0) mempty [everyDays]
+        createRepeatingTasks (toEnum 1) todaysTasks [everyDays] `shouldBe` []
+      it "should not recreate task once done immediately" $ do
+        let todaysTasks = createRepeatingTasks (toEnum 0) mempty [everyDays]
+            completedToday = (\t -> t {completionDay = Just (toEnum 0)}) <$> todaysTasks
+        createRepeatingTasks (toEnum 1) completedToday [everyDays] `shouldBe` []
+      it "should recreate task after repetition time" $ do
+        let todaysTasks = createRepeatingTasks (toEnum 0) mempty [everyDays]
+            completedToday = (\t -> t {completionDay = Just (toEnum 0)}) <$> todaysTasks
+        createRepeatingTasks (toEnum 4) completedToday [everyDays] `shouldNotBe` []
   describe "annealTasksInModel" $ do
     it "should fill up the space" $ do
       annealTasksInModel
