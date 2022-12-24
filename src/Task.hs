@@ -5,7 +5,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
-
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Task
@@ -21,6 +20,9 @@ module Task
     Importance (..),
     TimeEstimate (..),
     mapRepeater,
+    calculateWeekday,
+    createRepeatingTasks,
+    safeMaximum,
     annealTasksInModel,
     fromJsWeekday,
     showMiso,
@@ -36,9 +38,10 @@ where
 
 import Data.Aeson
 import Data.List (partition)
-import Data.Maybe (isNothing)
+import Data.Maybe (isJust, isNothing, mapMaybe)
 import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
+import Data.Time.Calendar.WeekDate (toWeekDate)
 import GHC.Generics (Generic)
 import Miso.String (MisoString, toMisoString)
 import Simanneal
@@ -283,3 +286,52 @@ weekdayToAllocationTime :: Weekday -> TimeEstimate
 weekdayToAllocationTime Saturday = TimeEstimate 180
 weekdayToAllocationTime Sunday = TimeEstimate 180
 weekdayToAllocationTime _ = TimeEstimate 80
+
+goBackUntilWeekdayMatches :: Weekday -> Day -> Day
+goBackUntilWeekdayMatches repeatOn lastClosing =
+  if calculateWeekday lastClosing == repeatOn
+    then lastClosing
+    else goBackUntilWeekdayMatches repeatOn (pred lastClosing)
+
+createRepeatingTasks :: Day -> [RegularTask] -> [RepeatingTask] -> [RegularTask]
+createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
+  where
+    createTask rt = [const (Just (taskId rt)) `mapRepeater` rt]
+    possiblyRepeat :: RepeatingTask -> [RegularTask]
+    possiblyRepeat rt
+      | isJust (completionDay rt) = []
+      | otherwise =
+        let hasOpenCandidate = any (\t -> repeater t == Just (taskId rt) && isNothing (completionDay t)) regularTasks
+         in if hasOpenCandidate
+              then []
+              else
+                let lastClosing = safeMaximum (mapMaybe (\t -> if repeater t == Just (taskId rt) then completionDay t else Nothing) regularTasks)
+                 in case lastClosing of
+                      Nothing -> createTask rt
+                      Just lc ->
+                        case repeater rt of
+                          EveryNDays n ->
+                            if diffDays today' lc >= fromIntegral n
+                              then createTask rt
+                              else []
+                          EveryWeekday repeatOn ->
+                            let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
+                             in if diffDays previousToBeClosed today' >= 7
+                                  then createTask rt
+                                  else []
+
+calculateWeekday :: Day -> Weekday
+calculateWeekday d =
+  let (_, _, dow) = toWeekDate d
+   in case dow of
+        1 -> Monday
+        2 -> Tuesday
+        3 -> Wednesday
+        4 -> Thursday
+        5 -> Friday
+        6 -> Saturday
+        _ -> Sunday
+
+safeMaximum :: Ord a => [a] -> Maybe a
+safeMaximum [] = Nothing
+safeMaximum xs = Just (maximum xs)
