@@ -37,6 +37,7 @@ module Task
 where
 
 import Data.Aeson
+import Data.Bifunctor (first)
 import Data.List (partition)
 import Data.Maybe (isJust, isNothing, mapMaybe)
 import qualified Data.Set as S
@@ -98,6 +99,9 @@ newtype TimeEstimate = TimeEstimate Int deriving (Eq, Ord, Num, Enum, Integral, 
 
 instance Semigroup TimeEstimate where
   TimeEstimate a <> TimeEstimate b = TimeEstimate (a + b)
+
+instance Read TimeEstimate where
+  readsPrec i s = first TimeEstimate <$> readsPrec i s
 
 instance Monoid TimeEstimate where
   mempty = TimeEstimate 0
@@ -203,6 +207,9 @@ type RepeatingTask = Task TaskId Repeater
 
 instance ToJSON TaskId where
   toJSON (TaskId i) = toJSON i
+
+instance ToJSON TimeEstimate where
+  toJSON (TimeEstimate i) = toJSON i
 
 instance ToJSON LeisureId where
   toJSON (LeisureId i) = toJSON i

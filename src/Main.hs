@@ -8,8 +8,6 @@
 
 module Main (main) where
 
--- This is 1.8.0.4
-
 import Data.Aeson
 import Data.List (maximumBy, partition, sortBy)
 import qualified Data.Map as M
@@ -37,10 +35,22 @@ foreign import javascript unsafe "$r = new Date().toISOString().substr(0,10)"
   getCurrentDay :: JSM MisoString
 #endif
 
+data ExplicitAllocation = ExplicitAllocation
+  { eaDate :: Day,
+    eaValue :: TimeEstimate
+  }
+  deriving (Eq, Show, Generic)
+
+instance FromJSON ExplicitAllocation
+
+instance ToJSON ExplicitAllocation
+
 data Model = Model
   { newTask :: Task () (Maybe Repeater),
     tasks :: [RegularTask],
     repeatingTasks :: [RepeatingTask],
+    explicitAllocation :: Maybe ExplicitAllocation,
+    explicitAllocationChanging :: Maybe TimeEstimate,
     remainingTasksOpened :: Bool,
     annealedTasks :: S.Set TaskId,
     statusMessages :: [MisoString],
@@ -61,7 +71,8 @@ localStorageKey = "v6"
 data LocalStorageModel = LocalStorageModel
   { lsTasks :: [Task TaskId (Maybe TaskId)],
     lsRepeatingTasks :: [Task TaskId Repeater],
-    lsLeisureProjects :: [LeisureProject LeisureId]
+    lsLeisureProjects :: [LeisureProject LeisureId],
+    lsExplicitAllocation :: Maybe ExplicitAllocation
   }
   deriving (Generic, Show, Eq)
 
@@ -74,6 +85,9 @@ data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | Nop
   | Init
+  | ToggleAdaptAllocation
+  | CancelAdaptAllocation
+  | AdaptAllocationChange TimeEstimate
   | ToggleRemainingTasksOpened
   | IncreaseSeed
   | AddTaskClicked
@@ -108,6 +122,8 @@ initialModel =
       repeatingTasks = mempty,
       annealedTasks = mempty,
       statusMessages = mempty,
+      explicitAllocation = Nothing,
+      explicitAllocationChanging = Nothing,
       remainingTasksOpened = False,
       today = toEnum 0,
       seed = 15,
@@ -120,7 +136,7 @@ initialLeisureProject :: LeisureProject ()
 initialLeisureProject = LeisureProject {leisureTitle = "", leisureId = ()}
 
 modelToLocalStorage :: Model -> LocalStorageModel
-modelToLocalStorage Model {tasks = tasks, repeatingTasks = repeatingTasks, leisureProjects = leisureProjects} = LocalStorageModel tasks repeatingTasks leisureProjects
+modelToLocalStorage Model {tasks = tasks, repeatingTasks = repeatingTasks, leisureProjects = leisureProjects, explicitAllocation = explicitAllocation} = LocalStorageModel tasks repeatingTasks leisureProjects explicitAllocation
 
 setLocalStorageFromModel :: Model -> JSM Action
 setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
@@ -140,9 +156,36 @@ updateRepeatingTask m tid f =
 parseDay :: MisoString -> Maybe Day
 parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 
+weekdayAllocationTime :: Model -> TimeEstimate
+weekdayAllocationTime m =
+  case explicitAllocation m of
+    Nothing -> weekdayToAllocationTime (weekday m)
+    Just (ExplicitAllocation explicitDate dateAllocation) ->
+      if explicitDate == today m
+        then dateAllocation
+        else weekdayToAllocationTime (weekday m)
+
+reanneal :: Model -> Model
+reanneal m = m {annealedTasks = annealTasksInModel (seed m) (today m) (weekdayAllocationTime m) (tasks m)}
+
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Model -> Effect Action Model
-updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekdayToAllocationTime (weekday m)) (tasks m)})
+updateModel (AdaptAllocationChange newValue) m = noEff (m {explicitAllocationChanging = Just newValue})
+updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekdayAllocationTime m) (tasks m)})
+updateModel CancelAdaptAllocation m =
+  noEff (m {explicitAllocationChanging = Nothing})
+updateModel ToggleAdaptAllocation m =
+  case explicitAllocationChanging m of
+    Nothing -> noEff (m {explicitAllocationChanging = Just (weekdayAllocationTime m)})
+    Just explicitValue ->
+      let newEa = ExplicitAllocation (today m) explicitValue
+          newModel =
+            reanneal $
+              m
+                { explicitAllocationChanging = Nothing,
+                  explicitAllocation = Just newEa
+                }
+       in newModel <# setLocalStorageFromModel newModel
 updateModel ToggleRemainingTasksOpened m = noEff (m {remainingTasksOpened = not (remainingTasksOpened m)})
 updateModel (ToggleLeisureProject projectId) m =
   let newModel = m {leisureProjects = filter (\lp -> leisureId lp /= projectId) (leisureProjects m)}
@@ -162,12 +205,13 @@ updateModel (LocalStorageReceived l) m =
     Right v ->
       let tasksAndRepeated = lsTasks v <> createRepeatingTasks (today m) (lsTasks v) (lsRepeatingTasks v)
        in noEff
-            ( m
-                { leisureProjects = lsLeisureProjects v,
-                  tasks = tasksAndRepeated,
-                  repeatingTasks = lsRepeatingTasks v,
-                  annealedTasks = annealTasksInModel (seed m) (today m) (weekdayToAllocationTime (weekday m)) tasksAndRepeated
-                }
+            ( reanneal $
+                m
+                  { leisureProjects = lsLeisureProjects v,
+                    tasks = tasksAndRepeated,
+                    repeatingTasks = lsRepeatingTasks v,
+                    explicitAllocation = lsExplicitAllocation v
+                  }
             )
 updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay]
 updateModel Nop m = noEff m
@@ -204,7 +248,7 @@ updateModel AddTaskClicked m =
              in m
                   { newTask = initialTask,
                     tasks = newTasks,
-                    annealedTasks = annealTasksInModel (seed m) (today m) (weekdayToAllocationTime (weekday m)) newTasks
+                    annealedTasks = annealTasksInModel (seed m) (today m) (weekdayAllocationTime m) newTasks
                   }
           Just repeating ->
             let newRepeatingTask :: RepeatingTask
@@ -403,10 +447,35 @@ buildProgressBar parts =
       makePart :: (Int, Maybe MisoString) -> View action
       makePart (_, Nothing) = text ""
       makePart (part, Just background) = div_ [class_ ("progress-bar " <> background), style_ (M.singleton "width" (makePercentageString part))] [text (showMiso part <> "min")]
-   in div_ [class_ "progress"] (makePart <$> parts)
+   in div_ [class_ "progress w-100", style_ (M.singleton "height" "2.7em")] (makePart <$> parts)
 
-viewProgressBar :: Day -> Weekday -> [RegularTask] -> View Action
-viewProgressBar today' weekday' all =
+viewAdapterSlider :: Model -> TimeEstimate -> View Action
+viewAdapterSlider _m currentValue =
+  div_
+    []
+    [ div_
+        [class_ "hstack gap-1"]
+        [ input_
+            [ type_ "range",
+              class_ "form-range",
+              min_ "0",
+              max_ "360",
+              id_ "adapter-slider",
+              value_ (showMiso (estimateInMinutes currentValue)),
+              onInput (AdaptAllocationChange . read . fromMisoString)
+            ],
+          button_
+            [class_ "btn btn-sm btn-danger", type_ "button", onClick CancelAdaptAllocation]
+            [text "Abbruch"],
+          button_
+            [class_ "btn btn-sm btn-primary", type_ "button", onClick ToggleAdaptAllocation]
+            [text "Ok"]
+        ],
+      small_ [] [strong_ [] [text (showMiso currentValue)]]
+    ]
+
+viewProgressBar :: Day -> TimeEstimate -> [RegularTask] -> View Action
+viewProgressBar today' allocated' all =
   let description
         | leftover > 0 = small_ [] [strong_ [] [text (showMiso leftover <> "min"), text " übrig"]]
         | overhang > 0 = small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
@@ -414,16 +483,20 @@ viewProgressBar today' weekday' all =
       done :: Int
       done = estimateInMinutes (foldMap timeEstimate (filter (\t -> completionDay t == Just today') all))
       allocated :: Int
-      allocated = estimateInMinutes (weekdayToAllocationTime weekday')
+      allocated = estimateInMinutes allocated'
       overhang :: Int
       overhang = max 0 (done - allocated)
       leftover = max 0 (allocated - done)
    in div_
         [class_ "mb-3"]
-        [ buildProgressBar
-            [ (min allocated done, Just "bg-success"),
-              (overhang, Just "bg-danger"),
-              (leftover, Nothing)
+        [ div_
+            [class_ "hstack gap-1"]
+            [ buildProgressBar
+                [ (min allocated done, Just "bg-success"),
+                  (overhang, Just "bg-danger"),
+                  (leftover, Nothing)
+                ],
+              button_ [type_ "button", class_ "btn btn-primary btn-sm", onClick ToggleAdaptAllocation] [text "Anpassen"]
             ],
           description
         ]
@@ -524,9 +597,13 @@ viewModelWork m =
                   ]
               ]
           ]
+      progressOrAdaptation =
+        case explicitAllocationChanging m of
+          Nothing -> viewProgressBar (today m) (weekdayAllocationTime m) (tasks m)
+          Just currentValue -> viewAdapterSlider m currentValue
    in div_
         []
-        [ viewProgressBar (today m) (weekday m) (tasks m),
+        [ progressOrAdaptation,
           div_
             [class_ "d-flex justify-content-between align-items-center"]
             [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> todayTasks)) <> "min)"]
