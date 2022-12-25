@@ -466,6 +466,7 @@ viewAdapterSlider _m currentValue =
               class_ "form-range",
               min_ "0",
               max_ "360",
+              step_ "10",
               id_ "adapter-slider",
               value_ (showMiso (estimateInMinutes currentValue)),
               onInput (AdaptAllocationChange . read . fromMisoString)
