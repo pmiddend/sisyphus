@@ -9,9 +9,11 @@
 module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Lens (Getter, to, use, (%=), (+=), (.=), (^.))
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson
+import Control.Monad.State.Class (get)
+import Data.Aeson hiding ((.=))
 import Data.List (maximumBy, partition, sortBy)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
@@ -23,11 +25,10 @@ import GHC.Generics (Generic)
 import Miso
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
 import Task
+import Types
 import Prelude hiding (all)
 #ifndef __GHCJS__
 import           Language.Javascript.JSaddle.Warp as JSaddle
--- import qualified Network.Wai.Handler.Warp         as Warp
--- import           Network.WebSockets
 #endif
 
 #ifndef __GHCJS__
@@ -38,35 +39,8 @@ foreign import javascript unsafe "$r = new Date().toISOString().substr(0,10)"
   getCurrentDay :: JSM MisoString
 #endif
 
-data ExplicitAllocation = ExplicitAllocation
-  { eaDate :: Day,
-    eaValue :: TimeEstimate
-  }
-  deriving (Eq, Show, Generic)
-
-instance FromJSON ExplicitAllocation
-
-instance ToJSON ExplicitAllocation
-
-data Model = Model
-  { newTask :: Task () (Maybe Repeater),
-    tasks :: [RegularTask],
-    repeatingTasks :: [RepeatingTask],
-    explicitAllocation :: Maybe ExplicitAllocation,
-    explicitAllocationChanging :: Maybe TimeEstimate,
-    remainingTasksOpened :: Bool,
-    annealedTasks :: S.Set TaskId,
-    statusMessages :: [MisoString],
-    today :: Day,
-    seed :: Int,
-    leisureProjects :: [LeisureProject LeisureId],
-    newLeisureProject :: LeisureProject (),
-    displayMode :: DisplayMode
-  }
-  deriving (Show, Generic, Eq)
-
-weekday :: Model -> Weekday
-weekday = calculateWeekday . today
+weekday :: Getter Model Weekday
+weekday = today . to calculateWeekday
 
 localStorageKey :: MisoString
 localStorageKey = "v6"
@@ -121,164 +95,191 @@ initialTask =
 initialModel :: Model
 initialModel =
   Model
-    { newTask = initialTask,
-      tasks = mempty,
-      repeatingTasks = mempty,
-      annealedTasks = mempty,
-      statusMessages = mempty,
-      explicitAllocation = Nothing,
-      explicitAllocationChanging = Nothing,
-      remainingTasksOpened = False,
-      today = toEnum 0,
-      seed = 15,
-      displayMode = DisplayWork,
-      leisureProjects = mempty,
-      newLeisureProject = initialLeisureProject
+    { _newTask = initialTask,
+      _tasks = mempty,
+      _repeatingTasks = mempty,
+      _annealedTasks = mempty,
+      _statusMessages = mempty,
+      _explicitAllocation = Nothing,
+      _explicitAllocationChanging = Nothing,
+      _remainingTasksOpened = False,
+      _today = toEnum 0,
+      _seed = 15,
+      _displayMode = DisplayWork,
+      _leisureProjects = mempty,
+      _newLeisureProject = initialLeisureProject
     }
 
 initialLeisureProject :: LeisureProject ()
 initialLeisureProject = LeisureProject {leisureTitle = "", leisureId = ()}
 
 modelToLocalStorage :: Model -> LocalStorageModel
-modelToLocalStorage Model {tasks = tasks, repeatingTasks = repeatingTasks, leisureProjects = leisureProjects, explicitAllocation = explicitAllocation} = LocalStorageModel tasks repeatingTasks leisureProjects explicitAllocation
+modelToLocalStorage Model {_tasks = tasks', _repeatingTasks = repeatingTasks', _leisureProjects = leisureProjects', _explicitAllocation = explicitAllocation'} = LocalStorageModel tasks' repeatingTasks' leisureProjects' explicitAllocation'
 
-setLocalStorageFromModel :: Model -> JSM Action
-setLocalStorageFromModel newModel = LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel)
+setLocalStorageFromModel :: Transition Action Model ()
+setLocalStorageFromModel = do
+  m <- get
+  scheduleIO (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage m))
 
-updateTask :: Model -> TaskId -> (RegularTask -> RegularTask) -> Model
-updateTask m tid f =
+updateTask :: TaskId -> (RegularTask -> RegularTask) -> Transition Action Model ()
+updateTask tid f = do
   let possiblyEditTask t = if taskId t == tid then f t else t
-      newTasks = possiblyEditTask <$> (tasks m)
-   in m {tasks = newTasks}
+  tasks %= (possiblyEditTask <$>)
 
-updateRepeatingTask :: Model -> TaskId -> (RepeatingTask -> RepeatingTask) -> Model
-updateRepeatingTask m tid f =
+updateRepeatingTask :: TaskId -> (RepeatingTask -> RepeatingTask) -> Transition Action Model ()
+updateRepeatingTask tid f = do
   let possiblyEditTask t = if taskId t == tid then f t else t
-      newTasks = possiblyEditTask <$> (repeatingTasks m)
-   in m {repeatingTasks = newTasks}
+  repeatingTasks %= (possiblyEditTask <$>)
 
 parseDay :: MisoString -> Maybe Day
 parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
 
-weekdayAllocationTime :: Model -> TimeEstimate
-weekdayAllocationTime m =
-  case explicitAllocation m of
-    Nothing -> weekdayToAllocationTime (weekday m)
-    Just (ExplicitAllocation explicitDate dateAllocation) ->
-      if explicitDate == today m
+weekdayAllocationTime' :: Model -> TimeEstimate
+weekdayAllocationTime' m =
+  case m ^. explicitAllocation of
+    Nothing -> weekdayToAllocationTime (m ^. weekday)
+    Just (ExplicitAllocation explicitDate dateAllocation) -> do
+      if explicitDate == (m ^. today)
         then dateAllocation
-        else weekdayToAllocationTime (weekday m)
+        else weekdayToAllocationTime (m ^. weekday)
 
-reanneal :: Model -> Model
-reanneal m =
-  let newTasks = tasks m <> createRepeatingTasks (today m) (tasks m) (repeatingTasks m)
-   in m {annealedTasks = annealTasksInModel (seed m) (today m) (weekdayAllocationTime m) newTasks}
+weekdayAllocationTime :: Transition Action Model TimeEstimate
+weekdayAllocationTime = do
+  s <- get
+  pure (weekdayAllocationTime' s)
+
+reanneal :: Transition Action Model ()
+reanneal = do
+  tasks' <- use tasks
+  today' <- use today
+  repeatingTasks' <- use repeatingTasks
+  seed' <- use seed
+  let newTasks = tasks' <> createRepeatingTasks today' tasks' repeatingTasks'
+  allocationTime' <- weekdayAllocationTime
+  annealedTasks .= annealTasksInModel seed' today' allocationTime' newTasks
 
 -- | Updates model, optionally introduces side effects
-updateModel :: Action -> Model -> Effect Action Model
-updateModel (AdaptAllocationChange newValue) m = noEff (m {explicitAllocationChanging = Just newValue})
-updateModel RequestRefresh m = m <# (CurrentDayReceived <$> getCurrentDay)
-updateModel IncreaseSeed m = noEff (m {seed = seed m + 1, annealedTasks = annealTasksInModel (seed m + 1) (today m) (weekdayAllocationTime m) (tasks m)})
-updateModel CancelAdaptAllocation m =
-  noEff (m {explicitAllocationChanging = Nothing})
-updateModel ToggleAdaptAllocation m =
-  case explicitAllocationChanging m of
-    Nothing -> noEff (m {explicitAllocationChanging = Just (weekdayAllocationTime m)})
-    Just explicitValue ->
-      let newEa = ExplicitAllocation (today m) explicitValue
-          newModel =
-            reanneal $
-              m
-                { explicitAllocationChanging = Nothing,
-                  explicitAllocation = Just newEa
-                }
-       in newModel <# setLocalStorageFromModel newModel
-updateModel ToggleRemainingTasksOpened m = noEff (m {remainingTasksOpened = not (remainingTasksOpened m)})
-updateModel (ToggleLeisureProject projectId) m =
-  let newModel = m {leisureProjects = filter (\lp -> leisureId lp /= projectId) (leisureProjects m)}
-   in newModel <# setLocalStorageFromModel newModel
-updateModel ToggleMode m =
-  noEff
-    ( m
-        { displayMode =
-            case displayMode m of
-              DisplayWork -> DisplayLeisure
-              DisplayLeisure -> DisplayWork
-        }
-    )
-updateModel (LocalStorageReceived l) m =
+updateModel :: Action -> Transition Action Model ()
+updateModel (AdaptAllocationChange newValue) = explicitAllocationChanging .= Just newValue
+updateModel RequestRefresh = scheduleIO (CurrentDayReceived <$> getCurrentDay)
+updateModel IncreaseSeed = do
+  seed += 1
+  tasks' <- use tasks
+  today' <- use today
+  seed' <- use seed
+  weekdayAllocation' <- weekdayAllocationTime
+  annealedTasks .= annealTasksInModel seed' today' weekdayAllocation' tasks'
+updateModel CancelAdaptAllocation = explicitAllocationChanging .= Nothing
+updateModel ToggleAdaptAllocation = do
+  explicitAllocChanging' <- use explicitAllocationChanging
+  case explicitAllocChanging' of
+    Nothing -> do
+      allocTime <- weekdayAllocationTime
+      explicitAllocationChanging .= Just allocTime
+    Just explicitValue -> do
+      explicitAllocationChanging .= Nothing
+      today' <- use today
+      let newEa = ExplicitAllocation today' explicitValue
+      explicitAllocation .= Just newEa
+      reanneal
+      setLocalStorageFromModel
+updateModel ToggleRemainingTasksOpened = do
+  rto <- use remainingTasksOpened
+  remainingTasksOpened .= not rto
+updateModel (ToggleLeisureProject projectId) = do
+  lps <- use leisureProjects
+  leisureProjects .= filter (\lp -> leisureId lp /= projectId) lps
+  setLocalStorageFromModel
+updateModel ToggleMode =
+  displayMode
+    %= ( \dm -> case dm of
+           DisplayWork -> DisplayLeisure
+           DisplayLeisure -> DisplayWork
+       )
+updateModel (LocalStorageReceived l) =
   case l of
-    Left errorMessage -> m <# do consoleLog ("error receiving local storage: " <> toMisoString errorMessage) >> pure Nop
-    Right v ->
-      noEff
-        ( reanneal $
-            m
-              { leisureProjects = lsLeisureProjects v,
-                tasks = lsTasks v,
-                repeatingTasks = lsRepeatingTasks v,
-                explicitAllocation = lsExplicitAllocation v
-              }
-        )
-updateModel Init m = batchEff m [LocalStorageReceived <$> getLocalStorage localStorageKey, CurrentDayReceived <$> getCurrentDay]
-updateModel Nop m = noEff m
-updateModel (CurrentDayReceived d) m =
+    Left errorMessage -> do
+      scheduleIO_ (consoleLog ("error receiving local storage: " <> toMisoString errorMessage))
+    Right v -> do
+      leisureProjects .= lsLeisureProjects v
+      repeatingTasks .= lsRepeatingTasks v
+      explicitAllocation .= lsExplicitAllocation v
+      tasks .= lsTasks v
+      reanneal
+updateModel Init = do
+  scheduleIO (LocalStorageReceived <$> getLocalStorage localStorageKey)
+  scheduleIO (CurrentDayReceived <$> getCurrentDay)
+updateModel Nop = pure ()
+updateModel (CurrentDayReceived d) =
   case fromMisoStringEither d of
-    Left _ -> noEff (m {statusMessages = "couldn't parse current day string" : statusMessages m})
+    Left _ -> do
+      sms <- use statusMessages
+      statusMessages .= ("couldn't parse current day string" : sms)
     Right ddecoded -> case parseDay ddecoded of
-      Nothing -> noEff (m {statusMessages = toMisoString ("couldn't parse \"" <> ddecoded <> "\"") : statusMessages m})
-      Just todayParsed -> noEff (reanneal $ m {today = todayParsed})
-updateModel LocalStorageUpdated m = noEff m
-updateModel (NewTaskChanged nt) m = noEff (m {newTask = nt})
-updateModel (NewLeisureProjectChanged lp) m = noEff (m {newLeisureProject = lp})
-updateModel (ToggleDone tid) m =
-  let newModel = updateTask m tid $ \t -> case completionDay t of
-        Nothing -> t {completionDay = Just (today m)}
-        Just _ -> t {completionDay = Nothing}
-   in newModel <# setLocalStorageFromModel newModel
-updateModel (ToggleRepeatingDone tid) m =
-  let newModel = updateRepeatingTask m tid $ \t -> case completionDay t of
-        Nothing -> t {completionDay = Just (today m)}
-        Just _ -> t {completionDay = Nothing}
-   in newModel <# setLocalStorageFromModel newModel
-updateModel AddTaskClicked m =
+      Nothing -> do
+        sms <- use statusMessages
+        statusMessages .= toMisoString ("couldn't parse \"" <> ddecoded <> "\"") : sms
+      Just todayParsed -> do
+        today .= todayParsed
+        reanneal
+updateModel LocalStorageUpdated = pure ()
+updateModel (NewTaskChanged nt) = newTask .= nt
+updateModel (NewLeisureProjectChanged lp) = newLeisureProject .= lp
+updateModel (ToggleDone tid) = do
+  today' <- use today
+  updateTask tid $ \t -> case completionDay t of
+    Nothing -> t {completionDay = Just today'}
+    Just _ -> t {completionDay = Nothing}
+  setLocalStorageFromModel
+updateModel (ToggleRepeatingDone tid) = do
+  today' <- use today
+  updateRepeatingTask tid $ \t -> case completionDay t of
+    Nothing -> t {completionDay = Just today'}
+    Just _ -> t {completionDay = Nothing}
+  setLocalStorageFromModel
+updateModel AddTaskClicked = do
+  tasks' <- use tasks
+  rtasks' <- use repeatingTasks
+  newTask' <- use newTask
   let maxId :: TaskId
-      maxId = fromMaybe (TaskId 0) (safeMaximum ((taskId <$> tasks m) <> (taskId <$> repeatingTasks m)))
+      maxId = fromMaybe (TaskId 0) (safeMaximum ((taskId <$> tasks') <> (taskId <$> rtasks')))
       newTaskWithId :: Task TaskId (Maybe Repeater)
-      newTaskWithId = const (increaseTaskId maxId) `mapTaskId` newTask m
-      newModel =
-        case repeater (newTask m) of
-          Nothing ->
-            let newNonrepeatingTask :: RegularTask
-                newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
-                newTasks = newNonrepeatingTask : tasks m
-             in m
-                  { newTask = initialTask,
-                    tasks = newTasks,
-                    annealedTasks = annealTasksInModel (seed m) (today m) (weekdayAllocationTime m) newTasks
-                  }
-          Just repeating ->
-            let newRepeatingTask :: RepeatingTask
-                newRepeatingTask = const repeating `mapRepeater` newTaskWithId
-                newRepeatingTasks = newRepeatingTask : repeatingTasks m
-             in m
-                  { newTask = initialTask,
-                    repeatingTasks = newRepeatingTasks
-                  }
-   in newModel <# (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel))
-updateModel AddLeisureProjectClicked m =
-  let maxId :: LeisureId
-      maxId = case leisureProjects m of
-        [] -> LeisureId 0
-        lps -> leisureId (maximumBy (comparing leisureId) lps)
-      addedLeisureProject :: LeisureProject LeisureId
-      addedLeisureProject = increaseLeisureId maxId <$ newLeisureProject m
-      newLeisureProjects = addedLeisureProject : leisureProjects m
-      newModel = m {newLeisureProject = initialLeisureProject, leisureProjects = newLeisureProjects}
-   in newModel <# (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage newModel))
+      newTaskWithId = const (increaseTaskId maxId) `mapTaskId` newTask'
+  case repeater newTask' of
+    Nothing ->
+      let newNonrepeatingTask :: RegularTask
+          newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
+          newTasks = newNonrepeatingTask : tasks'
+       in do
+            newTask .= initialTask
+            tasks .= newTasks
+            reanneal
+    Just repeating -> do
+      rts <- use repeatingTasks
+      let newRepeatingTask :: RepeatingTask
+          newRepeatingTask = const repeating `mapRepeater` newTaskWithId
+          newRepeatingTasks = newRepeatingTask : rts
+      newTask .= initialTask
+      repeatingTasks .= newRepeatingTasks
+      setLocalStorageFromModel
+updateModel AddLeisureProjectClicked =
+  do
+    lps <- use leisureProjects
+    newLp <- use newLeisureProject
+    let maxId :: LeisureId
+        maxId = case lps of
+          [] -> LeisureId 0
+          lps' -> leisureId (maximumBy (comparing leisureId) lps')
+        addedLeisureProject :: LeisureProject LeisureId
+        addedLeisureProject = increaseLeisureId maxId <$ newLp
+        newLeisureProjects = addedLeisureProject : lps
+    newLeisureProject .= initialLeisureProject
+    leisureProjects .= newLeisureProjects
+    setLocalStorageFromModel
 
 viewNewTaskForm :: Model -> View Action
 viewNewTaskForm m =
-  let nt = newTask m
+  let nt = m ^. newTask
       importances = (\i -> (showMiso (Importance i), Importance i)) <$> [0, 1, 2]
       timeEstimates = [("<10min", TimeEstimate 10), ("30min", TimeEstimate 30), ("1h", TimeEstimate 60), (">1h", TimeEstimate 120)]
       makeWeekdayRadio :: Weekday -> Weekday -> [View Action]
@@ -405,7 +406,7 @@ viewRepeatingTasks m =
                   ]
               ]
           ]
-      notDoneRepeating = filter (isNothing . completionDay) (repeatingTasks m)
+      notDoneRepeating = filter (isNothing . completionDay) (m ^. repeatingTasks)
    in div_
         [class_ "mt-3"]
         [ h3_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
@@ -512,15 +513,15 @@ viewModeSwitcher :: Model -> View Action
 viewModeSwitcher m =
   div_
     [class_ "btn-group d-flex mb-3"]
-    [ input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-work", value_ "work", checked_ (displayMode m == DisplayWork), onClick ToggleMode],
+    [ input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-work", value_ "work", checked_ ((m ^. displayMode) == DisplayWork), onClick ToggleMode],
       label_ [for_ "display-mode-work", class_ "btn btn-lg btn-outline-secondary w-100"] [text "🏢 Arbeit"],
-      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-leisure", value_ "leisure", checked_ (displayMode m == DisplayLeisure), onClick ToggleMode],
+      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-leisure", value_ "leisure", checked_ ((m ^. displayMode) == DisplayLeisure), onClick ToggleMode],
       label_ [for_ "display-mode-leisure", class_ "btn btn-lg btn-outline-secondary w-100"] ["😌 Freizeit"]
     ]
 
 viewModel :: Model -> View Action
 viewModel m =
-  let content = case displayMode m of
+  let content = case m ^. displayMode of
         DisplayWork -> viewModelWork m
         DisplayLeisure -> viewModelLeisure m
    in div_
@@ -529,8 +530,8 @@ viewModel m =
             link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet"],
             header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] ["⏰ Sisyphus"]],
             viewModeSwitcher m,
-            if statusMessages m /= []
-              then ol_ [] ((\sm -> li_ [] [text sm]) <$> statusMessages m)
+            if (m ^. statusMessages) /= []
+              then ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))
               else text ""
           ]
             ++ [content]
@@ -566,22 +567,22 @@ viewModelLeisure m =
           ]
    in div_
         []
-        [h3_ [] [text "🌴 Deine Freizeitprojekte"], div_ [class_ "list-group list-group-flush"] (viewLeisureProject <$> leisureProjects m), viewNewLeisureForm (newLeisureProject m)]
+        [h3_ [] [text "🌴 Deine Freizeitprojekte"], div_ [class_ "list-group list-group-flush"] (viewLeisureProject <$> (m ^. leisureProjects)), viewNewLeisureForm (m ^. newLeisureProject)]
 
 viewModelWork :: Model -> View Action
 viewModelWork m =
   let uncompletedTasks :: [RegularTask]
-      uncompletedTasks = filter (\t -> Data.Maybe.fromMaybe True ((>= today m) <$> completionDay t)) (tasks m)
+      uncompletedTasks = filter (\t -> Data.Maybe.fromMaybe True ((>= (m ^. today)) <$> completionDay t)) (m ^. tasks)
       taskIdsDoneToday :: S.Set TaskId
-      taskIdsDoneToday = S.fromList (taskId <$> filter (\t -> completionDay t == Just (today m)) uncompletedTasks)
+      taskIdsDoneToday = S.fromList (taskId <$> filter (\t -> completionDay t == Just (m ^. today)) uncompletedTasks)
       annealedIdsAndDoneToday :: S.Set TaskId
-      annealedIdsAndDoneToday = annealedTasks m <> taskIdsDoneToday
+      annealedIdsAndDoneToday = (m ^. annealedTasks) <> taskIdsDoneToday
       (todayTasks, remainingTasks) = partition (\t -> taskId t `S.member` annealedIdsAndDoneToday) uncompletedTasks
       deadlineDays :: Task idType repeaterType -> Integer
       deadlineDays t = case deadline t of
         Nothing -> 4
         Just d ->
-          let difference = diffDays d (today m)
+          let difference = diffDays d (m ^. today)
            in if difference < 0
                 then 0
                 else 1 + min 2 difference
@@ -596,17 +597,17 @@ viewModelWork m =
               [class_ "accordion-item"]
               [ h2_
                   [class_ "accordion-header"]
-                  [ button_ [class_ ("accordion-button" <> if remainingTasksOpened m then "" else " collapsed"), type_ "button", onClick ToggleRemainingTasksOpened] [text "Weitere Aufgaben"]
+                  [ button_ [class_ ("accordion-button" <> if m ^. remainingTasksOpened then "" else " collapsed"), type_ "button", onClick ToggleRemainingTasksOpened] [text "Weitere Aufgaben"]
                   ],
                 div_
-                  [class_ ("accordion-collapse collapse" <> if remainingTasksOpened m then " show" else "")]
-                  [ div_ [class_ "accordion-body"] [viewTasksListGroup (today m) sortedRemainingTasks]
+                  [class_ ("accordion-collapse collapse" <> if m ^. remainingTasksOpened then " show" else "")]
+                  [ div_ [class_ "accordion-body"] [viewTasksListGroup (m ^. today) sortedRemainingTasks]
                   ]
               ]
           ]
       progressOrAdaptation =
-        case explicitAllocationChanging m of
-          Nothing -> viewProgressBar (today m) (weekdayAllocationTime m) (tasks m)
+        case m ^. explicitAllocationChanging of
+          Nothing -> viewProgressBar (m ^. today) (weekdayAllocationTime' m) (m ^. tasks)
           Just currentValue -> viewAdapterSlider m currentValue
    in div_
         []
@@ -616,7 +617,7 @@ viewModelWork m =
             [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> todayTasks)) <> "min)"]
             -- div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
             ],
-          viewTasksListGroup (today m) (sortBy (comparing (Down . importance) <> comparing title) todayTasks),
+          viewTasksListGroup (m ^. today) (sortBy (comparing (Down . importance) <> comparing title) todayTasks),
           if null remainingTasks then text "" else viewRemainingTasks,
           viewNewTaskForm m,
           viewRepeatingTasks m
@@ -631,16 +632,20 @@ runApp app = app
 #endif
 
 main :: IO ()
-main = runApp $ startApp App {..}
+main =
+  runApp $
+    startApp
+      App
+        { initialAction = Init,
+          model = initialModel,
+          update = fromTransition . updateModel,
+          view = viewModel,
+          events = defaultEvents,
+          subs = [timer],
+          mountPoint = Nothing,
+          logLevel = Off
+        }
   where
-    initialAction = Init -- initial action to be executed on application load
-    model = initialModel
-    update = updateModel
-    view = viewModel
-    events = defaultEvents
-    subs = [timer]
-    mountPoint = Nothing
-    logLevel = Off
     refreshAction :: Sink Action -> IO ()
     refreshAction sink =
       forever $ do

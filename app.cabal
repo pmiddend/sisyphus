@@ -11,18 +11,18 @@ test-suite main-tests
   type: exitcode-stdio-1.0
 
   build-depends: tasty, tasty-hunit, tasty-quickcheck, base, mtl, transformers, random, miso, time, containers, aeson
-  other-modules:       Simanneal, Task
+  other-modules:       Simanneal, Task, Types
   hs-source-dirs: src, tests
   default-language: Haskell2010
 
 executable app
   main-is:             Main.hs
-  other-modules:       Simanneal, Task
+  other-modules:       Simanneal, Task, Types
   hs-source-dirs: src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   ghcjs-options:
     -dedupe
-  build-depends:       base, miso, aeson, time, containers, random, mtl, transformers
+  build-depends:       base, miso, aeson, time, containers, random, mtl, transformers, lens
   if !impl(ghcjs)
     build-depends:
        jsaddle, jsaddle-warp, transformers, warp, websockets
