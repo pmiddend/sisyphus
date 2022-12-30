@@ -3,7 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
+
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
@@ -14,7 +14,7 @@ import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
 import Data.Aeson hiding ((.=))
-import Data.List (maximumBy, partition, sortBy)
+import Data.List (partition, sortBy)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..), comparing)
@@ -115,7 +115,7 @@ initialModel =
     }
 
 initialLeisureProject :: LeisureProject ()
-initialLeisureProject = LeisureProject {leisureTitle = "", leisureId = ()}
+initialLeisureProject = LeisureProject {_leisureTitle = "", _leisureId = ()}
 
 modelToLocalStorage :: Model -> LocalStorageModel
 modelToLocalStorage Model {_tasks = tasks', _repeatingTasks = repeatingTasks', _leisureProjects = leisureProjects', _explicitAllocation = explicitAllocation'} = LocalStorageModel tasks' repeatingTasks' leisureProjects' explicitAllocation'
@@ -126,11 +126,11 @@ setLocalStorageFromModel = do
   scheduleIO (LocalStorageUpdated <$ setLocalStorage localStorageKey (modelToLocalStorage m))
 
 updateTask :: TaskId -> (RegularTask -> RegularTask) -> Transition Action Model ()
-updateTask tid f = do
+updateTask tid f =
   tasks . traversed . filtered (\t -> t ^. taskId == tid) %= f
 
 updateRepeatingTask :: TaskId -> (RepeatingTask -> RepeatingTask) -> Transition Action Model ()
-updateRepeatingTask tid f = do
+updateRepeatingTask tid f =
   repeatingTasks . traversed . filtered (\t -> t ^. taskId == tid) %= f
 
 parseDay :: MisoString -> Maybe Day
@@ -140,15 +140,14 @@ weekdayAllocationTime' :: Model -> TimeEstimate
 weekdayAllocationTime' m =
   case m ^. explicitAllocation of
     Nothing -> weekdayToAllocationTime (m ^. weekday)
-    Just (ExplicitAllocation explicitDate dateAllocation) -> do
+    Just (ExplicitAllocation explicitDate dateAllocation) ->
       if explicitDate == (m ^. today)
         then dateAllocation
         else weekdayToAllocationTime (m ^. weekday)
 
 weekdayAllocationTime :: Transition Action Model TimeEstimate
 weekdayAllocationTime = do
-  s <- get
-  pure (weekdayAllocationTime' s)
+  weekdayAllocationTime' <$> get
 
 reanneal :: Transition Action Model ()
 reanneal = do
@@ -190,7 +189,7 @@ updateModel ToggleRemainingTasksOpened = do
   remainingTasksOpened .= not rto
 updateModel (ToggleLeisureProject projectId) = do
   lps <- use leisureProjects
-  leisureProjects .= filter (\lp -> leisureId lp /= projectId) lps
+  leisureProjects .= filter (\lp -> (lp ^. leisureId) /= projectId) lps
   setLocalStorageFromModel
 updateModel ToggleMode =
   displayMode
@@ -200,7 +199,7 @@ updateModel ToggleMode =
        )
 updateModel (LocalStorageReceived l) =
   case l of
-    Left errorMessage -> do
+    Left errorMessage ->
       scheduleIO_ (consoleLog ("error receiving local storage: " <> toMisoString errorMessage))
     Right v -> do
       leisureProjects .= lsLeisureProjects v
@@ -276,9 +275,7 @@ updateModel AddLeisureProjectClicked =
     lps <- use leisureProjects
     newLp <- use newLeisureProject
     let maxId :: LeisureId
-        maxId = case lps of
-          [] -> LeisureId 0
-          lps' -> leisureId (maximumBy (comparing leisureId) lps')
+        maxId = fromMaybe (LeisureId 0) (safeMaximum ((^. leisureId) <$> lps))
         addedLeisureProject :: LeisureProject LeisureId
         addedLeisureProject = increaseLeisureId maxId <$ newLp
         newLeisureProjects = addedLeisureProject : lps
@@ -608,7 +605,7 @@ viewModelLeisure m =
           [ h3_ [] [viewIcon "plus-lg", text " Neues Projekt"],
             div_
               [class_ "form-floating mb-3"]
-              [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (leisureTitle nt), onInput (\i -> NewLeisureProjectChanged $ nt {leisureTitle = i})],
+              [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (nt ^. leisureTitle), onInput (\i -> NewLeisureProjectChanged (set leisureTitle i nt))],
                 label_ [for_ "title"] [text "Titel des Projekts"]
               ],
             button_ [type_ "button", class_ "btn btn-primary w-100", onClick AddLeisureProjectClicked] [viewIcon "save", text " Hinzufügen"]
@@ -622,10 +619,10 @@ viewModelLeisure m =
               [ button_
                   [ type_ "button",
                     class_ "btn btn-outline-secondary btn-sm",
-                    onClick (ToggleLeisureProject (leisureId p))
+                    onClick (ToggleLeisureProject (p ^. leisureId))
                   ]
                   [viewIcon "check-circle"],
-                span_ [] [text (leisureTitle p)]
+                span_ [] [text (p ^. leisureTitle)]
               ]
           ]
    in div_
@@ -635,7 +632,7 @@ viewModelLeisure m =
 viewModelWork :: Model -> View Action
 viewModelWork m =
   let uncompletedTasks :: [RegularTask]
-      uncompletedTasks = filter (\t -> Data.Maybe.fromMaybe True ((>= (m ^. today)) <$> (t ^. completionDay))) (m ^. tasks)
+      uncompletedTasks = filter (\t -> maybe True (>= (m ^. today)) (t ^. completionDay)) (m ^. tasks)
       taskIdsDoneToday :: S.Set TaskId
       taskIdsDoneToday = S.fromList ((^. taskId) <$> filter (\t -> (t ^. completionDay) == Just (m ^. today)) uncompletedTasks)
       annealedIdsAndDoneToday :: S.Set TaskId

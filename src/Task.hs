@@ -1,10 +1,10 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveGeneric #-}
+
+
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
+
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Task
@@ -149,7 +149,7 @@ createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
          in if hasOpenCandidate
               then []
               else
-                let lastClosing = safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then (t ^. completionDay) else Nothing) regularTasks)
+                let lastClosing = safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks)
                  in case lastClosing of
                       Nothing -> createTask rt
                       Just lc ->

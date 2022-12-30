@@ -19,6 +19,8 @@ module Types
     DisplayMode (..),
     Importance (..),
     importance,
+    leisureTitle,
+    leisureId,
     repeater,
     deadline,
     TimeEstimate (..),
@@ -191,10 +193,12 @@ increaseLeisureId :: LeisureId -> LeisureId
 increaseLeisureId (LeisureId i) = LeisureId (i + 1)
 
 data LeisureProject a = LeisureProject
-  { leisureTitle :: MisoString,
-    leisureId :: a
+  { _leisureTitle :: MisoString,
+    _leisureId :: a
   }
   deriving (Show, Eq, Generic, Functor)
+
+makeLenses ''LeisureProject
 
 instance FromJSON a => FromJSON (LeisureProject a)
 
