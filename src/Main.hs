@@ -158,6 +158,7 @@ reanneal = do
   repeatingTasks' <- use repeatingTasks
   seed' <- use seed
   let newTasks = tasks' <> createRepeatingTasks today' tasks' repeatingTasks'
+  tasks .= newTasks
   allocationTime' <- weekdayAllocationTime
   annealedTasks .= annealTasksInModel seed' today' allocationTime' newTasks
 
@@ -267,8 +268,6 @@ updateModel AddTaskClicked = do
        in do
             newTask .= initialTask today'
             tasks .= newTasks
-            reanneal
-            setLocalStorageFromModel
     Just repeating -> do
       rts <- use repeatingTasks
       let newRepeatingTask :: RepeatingTask
@@ -276,7 +275,8 @@ updateModel AddTaskClicked = do
           newRepeatingTasks = newRepeatingTask : rts
       newTask .= initialTask today'
       repeatingTasks .= newRepeatingTasks
-      setLocalStorageFromModel
+  reanneal
+  setLocalStorageFromModel
 updateModel AddLeisureProjectClicked =
   do
     lps <- use leisureProjects
