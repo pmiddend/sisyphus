@@ -35,13 +35,14 @@ module Task
   )
 where
 
-import Control.Lens (folded, sumOf, view, (^.))
+import Control.Lens (Getter, folded, from, sumOf, to, traversed, view, (^.))
 import Data.List (partition)
 import Data.Maybe (isJust, isNothing, mapMaybe)
 import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Calendar.WeekDate (toWeekDate)
 import Miso.String (MisoString, toMisoString)
+import Numeric.Lens (integral)
 import Simanneal
 import Types
 import Prelude hiding (all)
@@ -78,15 +79,16 @@ removeRandomElement xs = do
 
 annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> TimeEstimate -> [Task idType repeaterType] -> [Task idType repeaterType]
 annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
-  let taskImportanceSum :: [Task idType repeaterType] -> Float
-      taskImportanceSum = fromIntegral . sumOf (folded . importance . numericImportance)
-      taskUrgency :: Task idType repeaterType -> Float
-      taskUrgency t = case t ^. deadline of
-        Nothing -> 0.0
-        Just d ->
-          min 3.0 (fromIntegral (diffDays d today'))
-      taskUrgencySum :: [Task idType repeaterType] -> Float
-      taskUrgencySum ts = sum (taskUrgency <$> ts)
+  let taskUrgency :: Getter (Task idType repeaterType) Float
+      taskUrgency =
+        to
+          ( \t -> case t ^. deadline of
+              Nothing -> 0.0
+              Just d ->
+                min 3.0 (fromIntegral (diffDays d today'))
+          )
+      taskAge :: Getter (Task idType repeaterType) Float
+      taskAge = to (\t -> min 7.0 (abs (fromIntegral (diffDays (t ^. created) today'))))
       allocated :: TimeEstimate
       allocated = max 0 (timeBudgetForToday - spentMinutes)
       totalEstimate :: TimeEstimate
@@ -95,13 +97,16 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
       maxDistanceToAllocated = max allocated totalEstimate
       distance x y = abs (x - y)
       (baseTasks, remainingTasks) = partition (\t -> (t ^. deadline) == Just today') allTasks
-      taskEnergy :: ([Task idType repeaterType], [Task idType repeaterType]) -> Energy
-      taskEnergy (ts, _) =
-        let closeToAllocated :: Float
-            closeToAllocated = fromIntegral (distance allocated (taskEstimateSum (ts <> baseTasks))) / fromIntegral maxDistanceToAllocated
-            sumImportance = taskImportanceSum ts
-            sumUrgency = taskUrgencySum ts
-         in Energy (closeToAllocated - 0.05 * sumImportance - 0.05 * sumUrgency)
+      taskEnergy :: Task idType repeaterType -> Energy
+      taskEnergy t =
+        ((t ^. importance . numericImportance . to fromIntegral . from energyFloat) ^* 0.05)
+          + ((t ^. taskUrgency . from energyFloat) ^* 0.05)
+          + ((t ^. taskAge . from energyFloat) ^* 0.01)
+      taskGroupEnergy :: ([Task idType repeaterType], [Task idType repeaterType]) -> Energy
+      taskGroupEnergy (ts, _) =
+        let closeToAllocated :: Energy
+            closeToAllocated = Energy (fromIntegral (distance allocated (taskEstimateSum (ts <> baseTasks))) / fromIntegral maxDistanceToAllocated)
+         in closeToAllocated - sumOf (traversed . to taskEnergy) ts
       mutateTasks :: ([Task idType repeaterType], [Task idType repeaterType]) -> SimannealState ([Task idType repeaterType], [Task idType repeaterType]) ([Task idType repeaterType], [Task idType repeaterType])
       mutateTasks (chosenTasks, openTasks) = do
         removeOrAdd :: Int <- randomRS (1, 100)
@@ -119,7 +124,7 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
    in if length allTasks <= 1 || null remainingTasks
         then allTasks
         else
-          let solution = simanneal seed' (remainingTasks, []) mutateTasks taskEnergy 100.0 0.01 0.5
+          let solution = simanneal seed' (remainingTasks, []) mutateTasks taskGroupEnergy 100.0 0.01 0.5
            in (baseTasks <> fst solution)
 
 weekdayToAllocationTime :: Weekday -> TimeEstimate

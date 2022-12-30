@@ -32,6 +32,7 @@ module Types
     isEveryNDays,
     isEveryWeekday,
     seed,
+    created,
     title,
     displayMode,
     explicitAllocation,
@@ -133,6 +134,7 @@ instance FromJSON Repeater
 
 data Task idType repeaterType = Task
   { _title :: MisoString,
+    _created :: Day,
     _importance :: Importance,
     _deadline :: Maybe Day,
     _timeEstimate :: TimeEstimate,
@@ -167,12 +169,13 @@ mapRepeater f t = t {_repeater = f (_repeater t)}
 -- mapTaskBoth f g t = t {taskId = f (taskId t), repeater = g (repeater t)}
 
 instance (FromJSON idType, FromJSON repeaterType) => FromJSON (Task idType repeaterType) where
-  parseJSON = withObject "Task" $ \v -> Task <$> (v .: "title") <*> (v .: "importance") <*> (v .: "deadline") <*> (v .: "time-estimate") <*> (v .: "completion-day") <*> (v .: "id") <*> (v .: "repeater")
+  parseJSON = withObject "Task" $ \v -> Task <$> (v .: "title") <*> (v .: "created") <*> (v .: "importance") <*> (v .: "deadline") <*> (v .: "time-estimate") <*> (v .: "completion-day") <*> (v .: "id") <*> (v .: "repeater")
 
 instance (ToJSON idType, ToJSON repeaterType) => ToJSON (Task idType repeaterType) where
-  toJSON (Task title' (Importance importance') deadline' (TimeEstimate timeEstimate') completionDay' taskId' repeater') =
+  toJSON (Task title' created' (Importance importance') deadline' (TimeEstimate timeEstimate') completionDay' taskId' repeater') =
     object
       [ "title" .= title',
+        "created" .= created',
         "importance" .= importance',
         "time-estimate" .= timeEstimate',
         "completion-day" .= completionDay',

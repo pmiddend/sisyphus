@@ -19,40 +19,29 @@ important = Importance 1
 
 tenMin = TimeEstimate 10
 
-noDeadline title' importance' timeEstimate' tid' =
+defaultTask :: TaskId -> Task TaskId (Maybe repeaterType)
+defaultTask tid =
   Task
-    { title = title',
-      importance = importance',
-      deadline = Nothing,
-      timeEstimate = timeEstimate',
-      completionDay = Nothing,
-      taskId = tid',
-      repeater = Nothing
+    { _title = (showMiso tid),
+      _importance = notImportant,
+      _created = baseDay,
+      _deadline = Nothing,
+      _timeEstimate = tenMin,
+      _completionDay = Nothing,
+      _taskId = tid,
+      _repeater = Nothing
     }
 
-dailyTask :: RepeatingTask
-dailyTask =
-  Task
-    { title = "daily",
-      importance = notImportant,
-      deadline = Nothing,
-      timeEstimate = tenMin,
-      completionDay = Nothing,
-      taskId = TaskId 1,
-      repeater = EveryNDays 1
-    }
-
-everyDays :: RepeatingTask
-everyDays =
-  Task
-    { title = "everydays",
-      importance = notImportant,
-      deadline = Nothing,
-      timeEstimate = tenMin,
-      completionDay = Nothing,
-      taskId = TaskId 1,
-      repeater = EveryNDays 3
-    }
+-- noDeadline importance' timeEstimate' created' tid' =
+--   defaultTask {
+--       importance = importance',
+--       created = created',
+--       deadline = Nothing,
+--       timeEstimate = timeEstimate',
+--       completionDay = Nothing,
+--       taskId = tid',
+--       repeater = Nothing
+--     }
 
 main :: IO ()
 main = defaultMain tests
@@ -61,19 +50,10 @@ tests :: TestTree
 tests = testGroup "Tests" [unitTests]
 
 testsDailyTasks =
-  let dailyTask =
-        Task
-          { title = "daily",
-            importance = notImportant,
-            deadline = Nothing,
-            timeEstimate = tenMin,
-            completionDay = Nothing,
-            taskId = TaskId 1,
-            repeater = EveryNDays 1
-          }
+  let dailyTask = (defaultTask (TaskId 1)) {_repeater = EveryNDays 1}
    in testGroup
         "daily tasks"
-        [ testCase "task should be created" $ createRepeatingTasks (toEnum 0) mempty [dailyTask] @?= [dailyTask {repeater = Just (taskId dailyTask)}],
+        [ testCase "task should be created" $ createRepeatingTasks (toEnum 0) mempty [dailyTask] @?= [dailyTask {_repeater = Just (TaskId 1)}],
           testCase "task shouldn't be recreated if not done yet" $
             let todaysTasks = createRepeatingTasks (toEnum 0) mempty [dailyTask]
              in createRepeatingTasks (toEnum 1) todaysTasks [dailyTask]
@@ -81,37 +61,28 @@ testsDailyTasks =
           testCase
             "task should be recreated on the next day once it's done on the first day"
             $ let todaysTasks = createRepeatingTasks (toEnum 0) mempty [dailyTask]
-                  completedToday = (\t -> t {completionDay = Just (toEnum 0)}) <$> todaysTasks
+                  completedToday = (\t -> t {_completionDay = Just (toEnum 0)}) <$> todaysTasks
                in assertBool "should not be empty" (createRepeatingTasks (toEnum 1) completedToday [dailyTask] /= [])
         ]
 
 testEveryNDayTasks :: TestTree
 testEveryNDayTasks =
-  let everyDays =
-        Task
-          { title = "everydays",
-            importance = notImportant,
-            deadline = Nothing,
-            timeEstimate = tenMin,
-            completionDay = Nothing,
-            taskId = TaskId 1,
-            repeater = EveryNDays 3
-          }
+  let everyDays = (defaultTask (TaskId 1)) {_repeater = EveryNDays 3}
    in testGroup
         "Every N day tasks"
-        [ testCase "should create task" $ createRepeatingTasks (toEnum 0) mempty [everyDays] @?= [everyDays {repeater = Just (taskId everyDays)}],
+        [ testCase "should create task" $ createRepeatingTasks (toEnum 0) mempty [everyDays] @?= [everyDays {_repeater = Just (TaskId 1)}],
           testCase "should not create task twice" $
             let todaysTasks = createRepeatingTasks (toEnum 0) mempty [everyDays]
              in createRepeatingTasks (toEnum 1) todaysTasks [everyDays] @?= [],
           testCase "should not recreate task once done immediately" $
             let todaysTasks = createRepeatingTasks (toEnum 0) mempty [everyDays]
-                completedToday = (\t -> t {completionDay = Just (toEnum 0)}) <$> todaysTasks
+                completedToday = (\t -> t {_completionDay = Just (toEnum 0)}) <$> todaysTasks
              in createRepeatingTasks (toEnum 1) completedToday [everyDays]
                   @?= [],
           testCase
             "should recreate task after repetition time"
             $ let todaysTasks = createRepeatingTasks (toEnum 0) mempty [everyDays]
-                  completedToday = (\t -> t {completionDay = Just (toEnum 0)}) <$> todaysTasks
+                  completedToday = (\t -> t {_completionDay = Just (toEnum 0)}) <$> todaysTasks
                in assertBool "shouldn't create task" (createRepeatingTasks (toEnum 4) completedToday [everyDays] /= [])
         ]
 
@@ -124,8 +95,8 @@ testsAnnealing =
           baseSeed
           baseDay
           (TimeEstimate 80)
-          ((\tid -> noDeadline ("t" <> showMiso tid) notImportant tenMin tid) <$> [1 .. 8])
-          @?= (S.fromList [1 .. 8]),
+          (defaultTask . TaskId <$> [1 .. 8])
+          @?= (S.fromList (TaskId <$> [1 .. 8])),
       testCase
         "should fill up the space until limit is reached"
         $ ( S.size
@@ -133,7 +104,7 @@ testsAnnealing =
                   baseSeed
                   baseDay
                   (TimeEstimate 80)
-                  ((\tid -> noDeadline ("t" <> showMiso tid) notImportant tenMin tid) <$> [1 .. 20])
+                  (defaultTask . TaskId <$> [1 .. 20])
               )
           )
           @?= 8,
@@ -146,16 +117,27 @@ testsAnnealing =
                 baseSeed
                 baseDay
                 (TimeEstimate 30)
-                [ noDeadline "t1" notImportant tenMin (TaskId 1),
-                  noDeadline "t2" notImportant tenMin (TaskId 2),
-                  noDeadline "t3" notImportant tenMin (TaskId 3),
-                  noDeadline "t4" notImportant tenMin (TaskId 4),
-                  noDeadline "t5" notImportant tenMin (TaskId 5),
-                  noDeadline "t6" notImportant tenMin (TaskId 6),
-                  noDeadline "t7" important tenMin (TaskId 7),
-                  noDeadline "t8" notImportant tenMin (TaskId 8),
-                  noDeadline "t9" notImportant tenMin (TaskId 9)
+                [ defaultTask (TaskId 1),
+                  defaultTask (TaskId 2),
+                  defaultTask (TaskId 3),
+                  defaultTask (TaskId 4),
+                  defaultTask (TaskId 5),
+                  defaultTask (TaskId 6),
+                  (defaultTask (TaskId 7)) {_importance = important},
+                  defaultTask (TaskId 8),
+                  defaultTask (TaskId 9)
                 ]
+            ),
+      testCase
+        "should prioritize old tasks"
+        $ assertBool "old should be in it" $
+          S.member
+            (TaskId 11)
+            ( annealTasksInModel
+                baseSeed
+                baseDay
+                (TimeEstimate 30)
+                (((defaultTask . TaskId) <$> [1 .. 10]) <> [(defaultTask (TaskId 11)) {_created = pred (pred (pred baseDay))}])
             )
     ]
 

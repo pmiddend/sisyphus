@@ -43,7 +43,7 @@ weekday :: Getter Model Weekday
 weekday = today . to calculateWeekday
 
 localStorageKey :: MisoString
-localStorageKey = "v6"
+localStorageKey = "v7"
 
 data LocalStorageModel = LocalStorageModel
   { lsTasks :: [Task TaskId (Maybe TaskId)],
@@ -80,10 +80,11 @@ data Action
   | NewLeisureProjectChanged (LeisureProject ())
   deriving (Show, Eq)
 
-initialTask :: Task () (Maybe Repeater)
-initialTask =
+initialTask :: Day -> Task () (Maybe Repeater)
+initialTask today' =
   Task
     { _title = "",
+      _created = today',
       _importance = Importance 0,
       _deadline = Nothing,
       _timeEstimate = TimeEstimate 10,
@@ -92,10 +93,13 @@ initialTask =
       _repeater = Nothing
     }
 
+invalidDay :: Day
+invalidDay = toEnum 0
+
 initialModel :: Model
 initialModel =
   Model
-    { _newTask = initialTask,
+    { _newTask = initialTask invalidDay,
       _tasks = mempty,
       _repeatingTasks = mempty,
       _annealedTasks = mempty,
@@ -103,7 +107,7 @@ initialModel =
       _explicitAllocation = Nothing,
       _explicitAllocationChanging = Nothing,
       _remainingTasksOpened = False,
-      _today = toEnum 0,
+      _today = invalidDay,
       _seed = 15,
       _displayMode = DisplayWork,
       _leisureProjects = mempty,
@@ -219,6 +223,7 @@ updateModel (CurrentDayReceived d) =
         statusMessages .= toMisoString ("couldn't parse \"" <> ddecoded <> "\"") : sms
       Just todayParsed -> do
         today .= todayParsed
+        newTask . created .= todayParsed
         reanneal
 updateModel LocalStorageUpdated = pure ()
 updateModel (NewTaskChanged nt) = newTask .= nt
@@ -247,13 +252,14 @@ updateModel AddTaskClicked = do
       maxId = fromMaybe (TaskId 0) (safeMaximum (((^. taskId) <$> tasks') <> ((^. taskId) <$> rtasks')))
       newTaskWithId :: Task TaskId (Maybe Repeater)
       newTaskWithId = const (increaseTaskId maxId) `mapTaskId` newTask'
+  today' <- use today
   case newTask' ^. repeater of
     Nothing ->
       let newNonrepeatingTask :: RegularTask
           newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
           newTasks = newNonrepeatingTask : tasks'
        in do
-            newTask .= initialTask
+            newTask .= initialTask today'
             tasks .= newTasks
             reanneal
             setLocalStorageFromModel
@@ -262,7 +268,7 @@ updateModel AddTaskClicked = do
       let newRepeatingTask :: RepeatingTask
           newRepeatingTask = const repeating `mapRepeater` newTaskWithId
           newRepeatingTasks = newRepeatingTask : rts
-      newTask .= initialTask
+      newTask .= initialTask today'
       repeatingTasks .= newRepeatingTasks
       setLocalStorageFromModel
 updateModel AddLeisureProjectClicked =

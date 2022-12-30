@@ -2,8 +2,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Simanneal (simanneal, SimannealState, Energy (..), Temperature (..), randomRS, Seed) where
+module Simanneal (simanneal, SimannealState, Energy (..), Temperature (..), randomRS, Seed, (^*), energyFloat) where
 
+import Control.Lens (Iso', iso)
 import Control.Monad (when)
 import Control.Monad.State.Class (MonadState, get, put)
 import Control.Monad.Trans.State (State, runState)
@@ -13,6 +14,15 @@ import System.Random (Random, StdGen, mkStdGen, randomR)
 newtype Temperature = Temperature Float deriving (Fractional, Num, Eq, Ord)
 
 newtype Energy = Energy Float deriving (Num, Ord, Eq)
+
+scaleEnergy :: Energy -> Float -> Energy
+scaleEnergy (Energy g) x = Energy (g * x)
+
+(^*) :: Energy -> Float -> Energy
+(^*) = scaleEnergy
+
+energyFloat :: Iso' Energy Float
+energyFloat = iso (\(Energy i) -> i) Energy
 
 data SimannealData d = SimannealData
   { myStdGen :: StdGen,
