@@ -9,7 +9,7 @@
 module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Lens (Getter, to, use, (%=), (+=), (.=), (^.))
+import Control.Lens (Getter, filtered, over, set, sumOf, to, traversed, use, (%=), (%~), (&), (+=), (.=), (^.))
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
@@ -22,7 +22,7 @@ import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
-import Miso
+import Miso hiding (set)
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
 import Task
 import Types
@@ -83,13 +83,13 @@ data Action
 initialTask :: Task () (Maybe Repeater)
 initialTask =
   Task
-    { title = "",
-      importance = Importance 0,
-      deadline = Nothing,
-      timeEstimate = TimeEstimate 10,
-      completionDay = Nothing,
-      taskId = (),
-      repeater = Nothing
+    { _title = "",
+      _importance = Importance 0,
+      _deadline = Nothing,
+      _timeEstimate = TimeEstimate 10,
+      _completionDay = Nothing,
+      _taskId = (),
+      _repeater = Nothing
     }
 
 initialModel :: Model
@@ -123,13 +123,11 @@ setLocalStorageFromModel = do
 
 updateTask :: TaskId -> (RegularTask -> RegularTask) -> Transition Action Model ()
 updateTask tid f = do
-  let possiblyEditTask t = if taskId t == tid then f t else t
-  tasks %= (possiblyEditTask <$>)
+  tasks . traversed . filtered (\t -> t ^. taskId == tid) %= f
 
 updateRepeatingTask :: TaskId -> (RepeatingTask -> RepeatingTask) -> Transition Action Model ()
 updateRepeatingTask tid f = do
-  let possiblyEditTask t = if taskId t == tid then f t else t
-  repeatingTasks %= (possiblyEditTask <$>)
+  repeatingTasks . traversed . filtered (\t -> t ^. taskId == tid) %= f
 
 parseDay :: MisoString -> Maybe Day
 parseDay = parseTimeM True defaultTimeLocale "%Y-%m-%d" . fromMisoString
@@ -227,25 +225,29 @@ updateModel (NewTaskChanged nt) = newTask .= nt
 updateModel (NewLeisureProjectChanged lp) = newLeisureProject .= lp
 updateModel (ToggleDone tid) = do
   today' <- use today
-  updateTask tid $ \t -> case completionDay t of
-    Nothing -> t {completionDay = Just today'}
-    Just _ -> t {completionDay = Nothing}
+  updateTask tid $
+    over
+      completionDay
+      $ \cd -> case cd of
+        Nothing -> Just today'
+        Just _ -> Nothing
   setLocalStorageFromModel
 updateModel (ToggleRepeatingDone tid) = do
   today' <- use today
-  updateRepeatingTask tid $ \t -> case completionDay t of
-    Nothing -> t {completionDay = Just today'}
-    Just _ -> t {completionDay = Nothing}
+  updateRepeatingTask tid $ \t ->
+    t & completionDay %~ \cd -> case cd of
+      Nothing -> Just today'
+      Just _ -> Nothing
   setLocalStorageFromModel
 updateModel AddTaskClicked = do
   tasks' <- use tasks
   rtasks' <- use repeatingTasks
   newTask' <- use newTask
   let maxId :: TaskId
-      maxId = fromMaybe (TaskId 0) (safeMaximum ((taskId <$> tasks') <> (taskId <$> rtasks')))
+      maxId = fromMaybe (TaskId 0) (safeMaximum (((^. taskId) <$> tasks') <> ((^. taskId) <$> rtasks')))
       newTaskWithId :: Task TaskId (Maybe Repeater)
       newTaskWithId = const (increaseTaskId maxId) `mapTaskId` newTask'
-  case repeater newTask' of
+  case newTask' ^. repeater of
     Nothing ->
       let newNonrepeatingTask :: RegularTask
           newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
@@ -254,6 +256,7 @@ updateModel AddTaskClicked = do
             newTask .= initialTask
             tasks .= newTasks
             reanneal
+            setLocalStorageFromModel
     Just repeating -> do
       rts <- use repeatingTasks
       let newRepeatingTask :: RepeatingTask
@@ -284,30 +287,54 @@ viewNewTaskForm m =
       timeEstimates = [("<10min", TimeEstimate 10), ("30min", TimeEstimate 30), ("1h", TimeEstimate 60), (">1h", TimeEstimate 120)]
       makeWeekdayRadio :: Weekday -> Weekday -> [View Action]
       makeWeekdayRadio curWd wd =
-        [ input_ [class_ "btn-check", type_ "radio", name_ "weekday-repeater", id_ ("repeat-wd-" <> showMiso wd), value_ (showMiso wd), checked_ (curWd == wd), onClick (NewTaskChanged (nt {repeater = Just (EveryWeekday wd)}))],
+        [ input_
+            [ class_ "btn-check",
+              type_ "radio",
+              name_ "weekday-repeater",
+              id_ ("repeat-wd-" <> showMiso wd),
+              value_ (showMiso wd),
+              checked_ (curWd == wd),
+              onClick (NewTaskChanged (set repeater (Just (EveryWeekday wd)) nt))
+            ],
           label_ [for_ ("repeat-wd-" <> showMiso wd), class_ "btn btn-outline-primary w-100"] [text (showMiso wd)]
         ]
       makeImportanceRadio :: (MisoString, Importance) -> [View Action]
       makeImportanceRadio (displayText, value) =
-        [ input_ [class_ "btn-check", type_ "radio", name_ "importance", id_ displayText, value_ displayText, checked_ (importance nt == value), onClick (NewTaskChanged (nt {importance = value}))],
+        [ input_
+            [ class_ "btn-check",
+              type_ "radio",
+              name_ "importance",
+              id_ displayText,
+              value_ displayText,
+              checked_ ((nt ^. importance) == value),
+              onClick (NewTaskChanged (set importance value nt))
+            ],
           label_ [for_ displayText, class_ "btn btn-outline-primary w-100"] [text displayText]
         ]
       makeTimeEstimateRadio :: (MisoString, TimeEstimate) -> [View Action]
       makeTimeEstimateRadio (displayValue, value) =
-        [ input_ [class_ "btn-check", type_ "radio", name_ "time-estimate", id_ displayValue, value_ displayValue, checked_ (timeEstimate nt == value), onClick (NewTaskChanged (nt {timeEstimate = value}))],
+        [ input_
+            [ class_ "btn-check",
+              type_ "radio",
+              name_ "time-estimate",
+              id_ displayValue,
+              value_ displayValue,
+              checked_ ((nt ^. timeEstimate) == value),
+              onClick (NewTaskChanged (set timeEstimate value nt))
+            ],
           label_ [for_ displayValue, class_ "btn btn-outline-secondary w-100"] [text displayValue]
         ]
-      formForRepeater = case repeater nt of
+      formForRepeater = case nt ^. repeater of
         Nothing ->
           div_
             [class_ "form-floating mb-3"]
-            [ input_ [type_ "date", id_ "deadline", class_ "form-control", value_ (maybe "" showMiso (deadline nt)), onInput (\i -> NewTaskChanged $ nt {deadline = parseDay i})],
+            [ input_ [type_ "date", id_ "deadline", class_ "form-control", value_ (maybe "" showMiso (nt ^. deadline)), onInput (\i -> NewTaskChanged (set deadline (parseDay i) nt))],
               label_ [for_ "deadline"] [text "Deadline"]
             ]
         Just (EveryNDays n) ->
           div_
             [class_ "form-floating mb-3"]
-            [ input_ [type_ "number", id_ "every-n-days-input", class_ "form-control", value_ (showMiso n), onInput (\i -> NewTaskChanged $ nt {repeater = Just (EveryNDays (read (fromMisoString i)))})],
+            [ input_ [type_ "number", id_ "every-n-days-input", class_ "form-control", value_ (showMiso n), onInput (\i -> NewTaskChanged (set repeater (Just (EveryNDays (read (fromMisoString i)))) nt))],
               label_ [for_ "every-n-days-input"] [text "Tage"]
             ]
         Just (EveryWeekday wd) ->
@@ -323,7 +350,7 @@ viewNewTaskForm m =
         [ h3_ [] [viewIcon "plus-lg", text " Neue Aufgabe"],
           div_
             [class_ "form-floating mb-3"]
-            [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (title nt), onInput (\i -> NewTaskChanged $ nt {title = i})],
+            [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (nt ^. title), onInput (\i -> NewTaskChanged (set title i nt))],
               label_ [for_ "title"] [text "Titel der Aufgabe"]
             ],
           h5_ [] ["Wichtigkeit"],
@@ -333,14 +360,29 @@ viewNewTaskForm m =
           h5_ [] ["Deadline/Wiederholung"],
           div_
             [class_ "btn-group mb-3 d-flex"]
-            [ input_ [class_ "btn-check", type_ "radio", name_ "repeater", id_ "has-deadline", value_ "has-deadline", checked_ (isNothing (repeater nt)), onClick (NewTaskChanged (nt {repeater = Nothing}))],
+            [ input_ [class_ "btn-check", type_ "radio", name_ "repeater", id_ "has-deadline", value_ "has-deadline", checked_ (isNothing (nt ^. repeater)), onClick (NewTaskChanged (set repeater Nothing nt))],
               label_ [for_ "has-deadline", class_ "btn btn-outline-secondary w-100"] [text "Nicht wiederholend"],
-              input_ [class_ "btn-check", type_ "radio", name_ "repeater", id_ "every-n-days", value_ "every-n-days", checked_ (maybe False isEveryNDays (repeater nt)), onClick (NewTaskChanged (nt {repeater = Just (EveryNDays 1)}))],
+              input_
+                [ class_ "btn-check",
+                  type_ "radio",
+                  name_ "repeater",
+                  id_ "every-n-days",
+                  value_ "every-n-days",
+                  checked_ (maybe False isEveryNDays (nt ^. repeater)),
+                  onClick (NewTaskChanged (set repeater (Just (EveryNDays 1)) nt))
+                ],
               label_
                 [for_ "every-n-days", class_ "btn btn-outline-secondary w-100"]
                 [text "Alle N Tage"],
               input_
-                [class_ "btn-check", type_ "radio", name_ "repeater", id_ "every-weekday", value_ "every-weekday", checked_ (maybe False isEveryWeekday (repeater nt)), onClick (NewTaskChanged (nt {repeater = Just (EveryWeekday Monday)}))],
+                [ class_ "btn-check",
+                  type_ "radio",
+                  name_ "repeater",
+                  id_ "every-weekday",
+                  value_ "every-weekday",
+                  checked_ (maybe False isEveryWeekday (nt ^. repeater)),
+                  onClick (NewTaskChanged (set repeater (Just (EveryWeekday Monday)) nt))
+                ],
               label_ [for_ "every-weekday", class_ "btn btn-outline-secondary w-100"] [text "Bestimmter Wochentag"]
             ],
           formForRepeater,
@@ -391,22 +433,27 @@ viewRepeatingTasks m =
               [class_ "d-flex w-100 justify-content-between align-items-center"]
               [ div_
                   []
-                  [ input_ [type_ "checkbox", class_ "btn-check", id_ (showMiso (taskId t) <> "-check"), onClick (ToggleRepeatingDone (taskId t))],
+                  [ input_
+                      [ type_ "checkbox",
+                        class_ "btn-check",
+                        id_ (showMiso (t ^. taskId) <> "-check"),
+                        onClick (ToggleRepeatingDone (t ^. taskId))
+                      ],
                     label_
-                      [for_ (showMiso (taskId t) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
+                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
                       [viewIcon "check-circle"],
                     span_
                       [class_ "ms-3 mb-1"]
-                      [importanceToIcon (importance t), text (" " <> title t)]
+                      [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
                   ],
                 div_
                   [class_ "hstack gap-1"]
-                  [ viewRepeater (repeater t),
-                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (timeEstimate t))]
+                  [ viewRepeater (t ^. repeater),
+                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (t ^. timeEstimate))]
                   ]
               ]
           ]
-      notDoneRepeating = filter (isNothing . completionDay) (m ^. repeatingTasks)
+      notDoneRepeating = filter (isNothing . (^. completionDay)) (m ^. repeatingTasks)
    in div_
         [class_ "mt-3"]
         [ h3_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
@@ -423,21 +470,27 @@ viewTasksListGroup today' all =
               [class_ "d-flex w-100 justify-content-between align-items-center"]
               [ div_
                   []
-                  [ input_ [type_ "checkbox", class_ "btn-check", id_ (showMiso (taskId t) <> "-check"), checked_ (isJust (completionDay t)), onClick (ToggleDone (taskId t))],
+                  [ input_
+                      [ type_ "checkbox",
+                        class_ "btn-check",
+                        id_ (showMiso (t ^. taskId) <> "-check"),
+                        checked_ (isJust (t ^. completionDay)),
+                        onClick (ToggleDone (t ^. taskId))
+                      ],
                     label_
-                      [for_ (showMiso (taskId t) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
+                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
                       [viewIcon "check-circle"],
                     span_
                       [class_ "ms-3 mb-1"]
-                      [importanceToIcon (importance t), text (" " <> title t)]
+                      [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
                   ],
                 div_
                   []
                   [ maybe
                       (text "")
                       (\dl -> span_ [class_ "badge rounded-pill text-bg-success me-2"] [viewIcon "calendar-date", text (" " <> showDate today' dl)])
-                      (deadline t),
-                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (timeEstimate t))]
+                      (t ^. deadline),
+                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (t ^. timeEstimate))]
                   ]
               ]
           ]
@@ -455,6 +508,9 @@ buildProgressBar parts =
       makePart (_, Nothing) = text ""
       makePart (part, Just background) = div_ [class_ ("progress-bar " <> background), style_ (M.singleton "width" (makePercentageString part))] [text (showMiso part <> "min")]
    in div_ [class_ "progress w-100", style_ (M.singleton "height" "2.7em")] (makePart <$> parts)
+
+prettyPrintTimeEstimate :: TimeEstimate -> View action
+prettyPrintTimeEstimate = text . showMiso
 
 viewAdapterSlider :: Model -> TimeEstimate -> View Action
 viewAdapterSlider _m currentValue =
@@ -479,7 +535,7 @@ viewAdapterSlider _m currentValue =
             [class_ "btn btn-sm btn-primary", type_ "button", onClick ToggleAdaptAllocation]
             [text "Ok"]
         ],
-      small_ [] [strong_ [] [text (showMiso currentValue)]]
+      small_ [] [strong_ [] [prettyPrintTimeEstimate currentValue]]
     ]
 
 viewProgressBar :: Day -> TimeEstimate -> [RegularTask] -> View Action
@@ -489,11 +545,12 @@ viewProgressBar today' allocated' all =
         | overhang > 0 = small_ [] [text (showMiso overhang <> "min drüber, gib auf dich acht!")]
         | otherwise = text ""
       done :: Int
-      done = estimateInMinutes (foldMap timeEstimate (filter (\t -> completionDay t == Just today') all))
+      done = estimateInMinutes (foldMap (^. timeEstimate) (filter (\t -> (t ^. completionDay) == Just today') all))
       allocated :: Int
       allocated = estimateInMinutes allocated'
       overhang :: Int
       overhang = max 0 (done - allocated)
+      leftover :: Int
       leftover = max 0 (allocated - done)
    in div_
         [class_ "mb-3"]
@@ -572,14 +629,14 @@ viewModelLeisure m =
 viewModelWork :: Model -> View Action
 viewModelWork m =
   let uncompletedTasks :: [RegularTask]
-      uncompletedTasks = filter (\t -> Data.Maybe.fromMaybe True ((>= (m ^. today)) <$> completionDay t)) (m ^. tasks)
+      uncompletedTasks = filter (\t -> Data.Maybe.fromMaybe True ((>= (m ^. today)) <$> (t ^. completionDay))) (m ^. tasks)
       taskIdsDoneToday :: S.Set TaskId
-      taskIdsDoneToday = S.fromList (taskId <$> filter (\t -> completionDay t == Just (m ^. today)) uncompletedTasks)
+      taskIdsDoneToday = S.fromList ((^. taskId) <$> filter (\t -> (t ^. completionDay) == Just (m ^. today)) uncompletedTasks)
       annealedIdsAndDoneToday :: S.Set TaskId
       annealedIdsAndDoneToday = (m ^. annealedTasks) <> taskIdsDoneToday
-      (todayTasks, remainingTasks) = partition (\t -> taskId t `S.member` annealedIdsAndDoneToday) uncompletedTasks
+      (todayTasks, remainingTasks) = partition (\t -> (t ^. taskId) `S.member` annealedIdsAndDoneToday) uncompletedTasks
       deadlineDays :: Task idType repeaterType -> Integer
-      deadlineDays t = case deadline t of
+      deadlineDays t = case t ^. deadline of
         Nothing -> 4
         Just d ->
           let difference = diffDays d (m ^. today)
@@ -588,7 +645,7 @@ viewModelWork m =
                 else 1 + min 2 difference
       sortedRemainingTasks =
         sortBy
-          (comparing deadlineDays <> comparing (Down . importance) <> comparing (Down . timeEstimate))
+          (comparing deadlineDays <> comparing (Down . (^. importance)) <> comparing (Down . (^. timeEstimate)))
           remainingTasks
       viewRemainingTasks =
         div_
@@ -614,10 +671,10 @@ viewModelWork m =
         [ progressOrAdaptation,
           div_
             [class_ "d-flex justify-content-between align-items-center"]
-            [ h5_ [] [text $ "Vorschlag (" <> showMiso (sum (estimateInMinutes . timeEstimate <$> todayTasks)) <> "min)"]
+            [ h5_ [] [text $ "Vorschlag (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"]
             -- div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
             ],
-          viewTasksListGroup (m ^. today) (sortBy (comparing (Down . importance) <> comparing title) todayTasks),
+          viewTasksListGroup (m ^. today) (sortBy (comparing (Down . (^. importance)) <> comparing (^. title)) todayTasks),
           if null remainingTasks then text "" else viewRemainingTasks,
           viewNewTaskForm m,
           viewRepeatingTasks m

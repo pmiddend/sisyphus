@@ -18,19 +18,26 @@ module Types
     LeisureId (..),
     DisplayMode (..),
     Importance (..),
+    importance,
+    repeater,
+    deadline,
     TimeEstimate (..),
     ExplicitAllocation (..),
     Model (..),
     mapRepeater,
+    completionDay,
     increaseTaskId,
     mapTaskId,
     increaseLeisureId,
     isEveryNDays,
     isEveryWeekday,
-    importanceNumeric,
     seed,
+    title,
     displayMode,
     explicitAllocation,
+    numericImportance,
+    taskId,
+    timeEstimate,
     explicitAllocationChanging,
     leisureProjects,
     newLeisureProject,
@@ -44,7 +51,7 @@ module Types
   )
 where
 
-import Control.Lens (makeLenses)
+import Control.Lens (Iso', iso, makeLenses)
 import Data.Aeson
 import Data.Bifunctor (first)
 import qualified Data.Set as S
@@ -68,7 +75,14 @@ instance FromJSON Weekday
 
 instance ToJSON Weekday
 
+newtype TaskId = TaskId Int deriving (Eq, Show, Ord)
+
+newtype LeisureId = LeisureId Int deriving (Eq, Show, Ord)
+
 newtype Importance = Importance Int deriving (Eq, Ord)
+
+numericImportance :: Iso' Importance Int
+numericImportance = iso (\(Importance i) -> i) Importance
 
 instance Show Importance where
   show (Importance x) = case x of
@@ -76,9 +90,6 @@ instance Show Importance where
     1 -> "Wichtig"
     2 -> "Superwichtig"
     _ -> "Wichtigkeit(" <> show x <> ")"
-
-importanceNumeric :: Importance -> Int
-importanceNumeric (Importance x) = x
 
 instance FromJSON Importance where
   parseJSON = withScientific "Importance" (pure . Importance . floor)
@@ -101,12 +112,7 @@ instance Monoid TimeEstimate where
   mempty = TimeEstimate 0
 
 instance Show TimeEstimate where
-  show (TimeEstimate x) = case x of
-    10 -> "<10min"
-    30 -> "30min"
-    60 -> "1h"
-    120 -> ">1h"
-    _ -> show x <> "min"
+  show (TimeEstimate x) = show x <> "min"
 
 instance FromJSON TimeEstimate where
   parseJSON = withScientific "TimeEstimate" (pure . TimeEstimate . floor)
@@ -126,29 +132,31 @@ instance ToJSON Repeater
 instance FromJSON Repeater
 
 data Task idType repeaterType = Task
-  { title :: MisoString,
-    importance :: Importance,
-    deadline :: Maybe Day,
-    timeEstimate :: TimeEstimate,
-    completionDay :: Maybe Day,
-    taskId :: idType,
-    repeater :: repeaterType
+  { _title :: MisoString,
+    _importance :: Importance,
+    _deadline :: Maybe Day,
+    _timeEstimate :: TimeEstimate,
+    _completionDay :: Maybe Day,
+    _taskId :: idType,
+    _repeater :: repeaterType
   }
   deriving (Show, Generic, Eq)
+
+makeLenses ''Task
 
 mapTaskId ::
   forall idTypeBefore idTypeAfter repeaterType.
   (idTypeBefore -> idTypeAfter) ->
   Task idTypeBefore repeaterType ->
   Task idTypeAfter repeaterType
-mapTaskId f t = t {taskId = f (taskId t)}
+mapTaskId f t = t {_taskId = f (_taskId t)}
 
 mapRepeater ::
   forall idType repeaterTypeBefore repeaterTypeAfter.
   (repeaterTypeBefore -> repeaterTypeAfter) ->
   Task idType repeaterTypeBefore ->
   Task idType repeaterTypeAfter
-mapRepeater f t = t {repeater = f (repeater t)}
+mapRepeater f t = t {_repeater = f (_repeater t)}
 
 -- mapTaskBoth ::
 --   forall idTypeBefore idTypeAfter repeaterTypeBefore repeaterTypeAfter.
@@ -162,26 +170,22 @@ instance (FromJSON idType, FromJSON repeaterType) => FromJSON (Task idType repea
   parseJSON = withObject "Task" $ \v -> Task <$> (v .: "title") <*> (v .: "importance") <*> (v .: "deadline") <*> (v .: "time-estimate") <*> (v .: "completion-day") <*> (v .: "id") <*> (v .: "repeater")
 
 instance (ToJSON idType, ToJSON repeaterType) => ToJSON (Task idType repeaterType) where
-  toJSON (Task title (Importance importance) deadline (TimeEstimate timeEstimate) completionDay taskId repeater) =
+  toJSON (Task title' (Importance importance') deadline' (TimeEstimate timeEstimate') completionDay' taskId' repeater') =
     object
-      [ "title" .= title,
-        "importance" .= importance,
-        "time-estimate" .= timeEstimate,
-        "completion-day" .= completionDay,
-        "deadline" .= deadline,
-        "id" .= taskId,
-        "repeater" .= repeater
+      [ "title" .= title',
+        "importance" .= importance',
+        "time-estimate" .= timeEstimate',
+        "completion-day" .= completionDay',
+        "deadline" .= deadline',
+        "id" .= taskId',
+        "repeater" .= repeater'
       ]
-
-newtype TaskId = TaskId Int deriving (Eq, Show, Ord)
 
 increaseTaskId :: TaskId -> TaskId
 increaseTaskId (TaskId i) = TaskId (i + 1)
 
 increaseLeisureId :: LeisureId -> LeisureId
 increaseLeisureId (LeisureId i) = LeisureId (i + 1)
-
-newtype LeisureId = LeisureId Int deriving (Eq, Show, Ord)
 
 data LeisureProject a = LeisureProject
   { leisureTitle :: MisoString,

@@ -35,6 +35,7 @@ module Task
   )
 where
 
+import Control.Lens (folded, sumOf, view, (^.))
 import Data.List (partition)
 import Data.Maybe (isJust, isNothing, mapMaybe)
 import qualified Data.Set as S
@@ -46,18 +47,19 @@ import Types
 import Prelude hiding (all)
 
 taskEstimateSum :: [Task idType repeaterType] -> TimeEstimate
-taskEstimateSum ts = TimeEstimate (sum (estimateInMinutes . timeEstimate <$> ts))
+--taskEstimateSum ts = TimeEstimate (sum (estimateInMinutes . timeEstimate <$> ts))
+taskEstimateSum = sumOf (folded . timeEstimate)
 
 annealTasksInModel :: forall idType repeaterType. Ord idType => Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> S.Set idType
 annealTasksInModel seed' today' timeBudgetForToday tasks' =
   S.fromList
-    ( taskId
+    ( view taskId
         <$> annealTasks
           seed'
           today'
           timeBudgetForToday
-          (taskEstimateSum (filter (\t -> completionDay t == Just today') tasks'))
-          (filter (isNothing . completionDay) tasks')
+          (taskEstimateSum (filter (\t -> (t ^. completionDay) == Just today') tasks'))
+          (filter (isNothing . view completionDay) tasks')
     )
 
 estimateInMinutes :: TimeEstimate -> Int
@@ -77,9 +79,9 @@ removeRandomElement xs = do
 annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> TimeEstimate -> [Task idType repeaterType] -> [Task idType repeaterType]
 annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
   let taskImportanceSum :: [Task idType repeaterType] -> Float
-      taskImportanceSum ts = fromIntegral (sum ((importanceNumeric . importance) <$> ts))
+      taskImportanceSum = fromIntegral . sumOf (folded . importance . numericImportance)
       taskUrgency :: Task idType repeaterType -> Float
-      taskUrgency t = case deadline t of
+      taskUrgency t = case t ^. deadline of
         Nothing -> 0.0
         Just d ->
           min 3.0 (fromIntegral (diffDays d today'))
@@ -92,7 +94,7 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
       maxDistanceToAllocated :: TimeEstimate
       maxDistanceToAllocated = max allocated totalEstimate
       distance x y = abs (x - y)
-      (baseTasks, remainingTasks) = partition (\t -> deadline t == Just today') allTasks
+      (baseTasks, remainingTasks) = partition (\t -> (t ^. deadline) == Just today') allTasks
       taskEnergy :: ([Task idType repeaterType], [Task idType repeaterType]) -> Energy
       taskEnergy (ts, _) =
         let closeToAllocated :: Float
@@ -134,20 +136,20 @@ goBackUntilWeekdayMatches repeatOn lastClosing =
 createRepeatingTasks :: Day -> [RegularTask] -> [RepeatingTask] -> [RegularTask]
 createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
   where
-    createTask rt = [const (Just (taskId rt)) `mapRepeater` rt]
+    createTask rt = [const (Just (rt ^. taskId)) `mapRepeater` rt]
     possiblyRepeat :: RepeatingTask -> [RegularTask]
     possiblyRepeat rt
-      | isJust (completionDay rt) = []
+      | isJust (rt ^. completionDay) = []
       | otherwise =
-        let hasOpenCandidate = any (\t -> repeater t == Just (taskId rt) && isNothing (completionDay t)) regularTasks
+        let hasOpenCandidate = any (\t -> (t ^. repeater) == Just (rt ^. taskId) && isNothing (t ^. completionDay)) regularTasks
          in if hasOpenCandidate
               then []
               else
-                let lastClosing = safeMaximum (mapMaybe (\t -> if repeater t == Just (taskId rt) then completionDay t else Nothing) regularTasks)
+                let lastClosing = safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then (t ^. completionDay) else Nothing) regularTasks)
                  in case lastClosing of
                       Nothing -> createTask rt
                       Just lc ->
-                        case repeater rt of
+                        case rt ^. repeater of
                           EveryNDays n ->
                             if diffDays today' lc >= fromIntegral n
                               then createTask rt
