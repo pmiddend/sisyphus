@@ -19,7 +19,7 @@ executable app
   main-is:             Main.hs
   other-modules:       Simanneal, Task, Types
   hs-source-dirs: src
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields
   ghcjs-options:
     -dedupe
   build-depends:       base, miso, aeson, time, containers, random, mtl, transformers, lens

@@ -42,7 +42,6 @@ import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Calendar.WeekDate (toWeekDate)
 import Miso.String (MisoString, toMisoString)
-import Numeric.Lens (integral)
 import Simanneal
 import Types
 import Prelude hiding (all)

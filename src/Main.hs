@@ -485,7 +485,7 @@ viewTasksListGroup today' all =
                       ],
                     label_
                       [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
-                      [viewIcon "check-circle"],
+                      [viewIcon "check-lg"],
                     span_
                       [class_ "ms-3 mb-1"]
                       [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
