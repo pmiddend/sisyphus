@@ -397,7 +397,7 @@ viewNewTaskForm m =
             ],
           formForRepeater,
           button_
-            [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked]
+            [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked, disabled_ (m ^. newTask . title == "")]
             [viewIcon "save", text " Hinzufügen"]
         ]
 
@@ -451,7 +451,7 @@ viewRepeatingTasks m =
                       ],
                     label_
                       [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
-                      [viewIcon "check-circle"],
+                      [viewIcon "check-lg"],
                     span_
                       [class_ "ms-3 mb-1"]
                       [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
@@ -630,7 +630,7 @@ viewModelLeisure m =
                   ]
               ],
             button_
-              [type_ "button", class_ "btn btn-primary w-100", onClick AddLeisureProjectClicked]
+              [type_ "button", class_ "btn btn-primary w-100", onClick AddLeisureProjectClicked, disabled_ (m ^. newLeisureProject . leisureTitle == "")]
               [viewIcon "save", text " Hinzufügen"]
           ]
       viewLeisureProject :: LeisureProject LeisureId -> View Action
