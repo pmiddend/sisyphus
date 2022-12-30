@@ -459,7 +459,7 @@ viewRepeatingTasks m =
                       ],
                     label_
                       [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
-                      [viewIcon "check-lg"],
+                      [viewIcon "trash"],
                     span_
                       [class_ "ms-3 mb-1"]
                       [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
