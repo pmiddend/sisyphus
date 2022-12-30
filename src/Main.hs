@@ -350,10 +350,16 @@ viewNewTaskForm m =
               label_ [for_ "deadline"] [text "Deadline"]
             ]
         Just (EveryNDays n) ->
-          div_
-            [class_ "form-floating mb-3"]
-            [ input_ [type_ "number", id_ "every-n-days-input", class_ "form-control", value_ (showMiso n), onInput (\i -> NewTaskChanged (set repeater (Just (EveryNDays (read (fromMisoString i)))) nt))],
-              label_ [for_ "every-n-days-input"] [text "Tage"]
+          div_ [ class_ "d-flex justify-content-between align-items-center mb-3" ] [
+              strong_ [ ] (
+                  if n == 1
+                  then [ text "jeden tag" ]
+                  else [ text "alle ", text (showMiso n), text " Tag(e)" ]
+                  ),
+              div_ [ class_ "hstack gap-3" ] [
+                button_ [ type_ "button", class_ "btn btn-primary", onClick (NewTaskChanged (set repeater (Just (EveryNDays (n-1))) nt)), disabled_ (n == 1) ] [ viewIcon "dash-lg" ],
+                button_ [ type_ "button", class_ "btn btn-primary", onClick (NewTaskChanged (set repeater (Just (EveryNDays (n+1))) nt)) ] [ viewIcon "plus-lg" ]
+              ]
             ]
         Just (EveryWeekday wd) ->
           div_
@@ -603,7 +609,7 @@ viewModel m =
       extraElements = [
         link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
         link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet" ]
-        ]
+          ]
 #else
       extraElements = []
 #endif

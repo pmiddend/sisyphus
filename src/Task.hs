@@ -31,6 +31,7 @@ module Task
     estimateInMinutes,
     weekdayToAllocationTime,
     equating,
+    readIntegral,
   )
 where
 
@@ -185,3 +186,9 @@ applyN n f = foldr (.) id (replicate n f)
 
 succN :: Enum a => Int -> a -> a
 succN n = applyN n succ
+
+readIntegral :: Num a => String -> Maybe a
+readIntegral s =
+  case reads s of
+    (i, _) : _ -> Just $ fromInteger i
+    [] -> Nothing
