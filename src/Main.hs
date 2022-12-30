@@ -591,12 +591,18 @@ viewModel m =
   let content = case m ^. displayMode of
         DisplayWork -> viewModelWork m
         DisplayLeisure -> viewModelLeisure m
+#ifndef __GHCJS__
+      extraElements = [
+        link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
+        link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet" ]
+        ]
+#else
+      extraElements = []
+#endif
    in div_
-        [class_ "container"]
-        ( [ link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
-            link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet"],
-            header_ [class_ "d-flex justify-content-center bg-info text-light mb-3"] [h1_ [class_ "mt-2 mb-2"] ["⏰ Sisyphus"]],
-            viewModeSwitcher m,
+        [class_ "container mt-3"]
+        ( extraElements ++
+          [ viewModeSwitcher m,
             if (m ^. statusMessages) /= []
               then ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))
               else text ""
@@ -772,7 +778,11 @@ main =
           view = viewModel,
           events = defaultEvents,
           subs = [timer],
+#ifndef __GHCJS__
           mountPoint = Nothing,
+#else
+          mountPoint = Just "miso-main",
+#endif
           logLevel = Off
         }
   where

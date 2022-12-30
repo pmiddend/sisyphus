@@ -16,6 +16,8 @@ module Task
     Importance (..),
     TimeEstimate (..),
     mapRepeater,
+    applyN,
+    succN,
     calculateWeekday,
     createRepeatingTasks,
     safeMaximum,
@@ -35,7 +37,7 @@ where
 import Control.Lens (Getter, folded, from, sumOf, to, traversed, view, (^.))
 import Data.Function (on)
 import Data.List (partition)
-import Data.Maybe (isJust, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Set as S
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Calendar.WeekDate (toWeekDate)
@@ -82,7 +84,7 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
           ( \t -> case t ^. deadline of
               Nothing -> 0.0
               Just d ->
-                min 3.0 (fromIntegral (diffDays d today'))
+                min 3.0 (max 0.0 (fromIntegral (diffDays d today')))
           )
       taskAge :: Getter (Task idType repeaterType) Float
       taskAge = to (\t -> min 7.0 (abs (fromIntegral (diffDays (t ^. created) today'))))
@@ -93,7 +95,7 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
       maxDistanceToAllocated :: TimeEstimate
       maxDistanceToAllocated = max allocated totalEstimate
       distance x y = abs (x - y)
-      (baseTasks, remainingTasks) = partition (\t -> (t ^. deadline) == Just today') allTasks
+      (baseTasks, remainingTasks) = partition (\t -> maybe False (<= today') (t ^. deadline)) allTasks
       taskEnergy :: Task idType repeaterType -> Energy
       taskEnergy t =
         ((t ^. importance . numericImportance . to fromIntegral . from energyFloat) ^* 0.05)
@@ -147,20 +149,17 @@ createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
          in if hasOpenCandidate
               then []
               else
-                let lastClosing = safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks)
-                 in case lastClosing of
-                      Nothing -> createTask rt
-                      Just lc ->
-                        case rt ^. repeater of
-                          EveryNDays n ->
-                            if diffDays today' lc >= fromIntegral n
+                let lc = fromMaybe (rt ^. created) (safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks))
+                 in case rt ^. repeater of
+                      EveryNDays n ->
+                        if diffDays today' lc >= fromIntegral n
+                          then createTask rt
+                          else []
+                      EveryWeekday repeatOn ->
+                        let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
+                         in if diffDays previousToBeClosed today' >= 7
                               then createTask rt
                               else []
-                          EveryWeekday repeatOn ->
-                            let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
-                             in if diffDays previousToBeClosed today' >= 7
-                                  then createTask rt
-                                  else []
 
 calculateWeekday :: Day -> Weekday
 calculateWeekday d =
@@ -180,3 +179,8 @@ safeMaximum xs = Just (maximum xs)
 
 equating :: Eq a => (b -> a) -> b -> b -> Bool
 equating f = (==) `on` f
+
+applyN :: Int -> (a -> a) -> a -> a
+applyN n f = foldr (.) id (replicate n f)
+
+succN n = applyN n succ
