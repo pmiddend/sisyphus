@@ -465,7 +465,7 @@ viewRepeatingTasks m =
           ]
       notDoneRepeating = filter (isNothing . (^. completionDay)) (m ^. repeatingTasks)
    in div_
-        [class_ "mt-3"]
+        [class_ "mt-3 mb-3"]
         [ h3_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
           div_ [class_ "list-group list-group-flush"] (viewRepeatTaskItem <$> notDoneRepeating)
         ]
