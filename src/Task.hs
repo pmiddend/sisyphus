@@ -1,10 +1,6 @@
 {-# LANGUAGE CPP #-}
-
-
 {-# LANGUAGE FlexibleContexts #-}
-
 {-# LANGUAGE NamedFieldPuns #-}
-
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Task
@@ -32,10 +28,12 @@ module Task
     isEveryWeekday,
     estimateInMinutes,
     weekdayToAllocationTime,
+    equating,
   )
 where
 
 import Control.Lens (Getter, folded, from, sumOf, to, traversed, view, (^.))
+import Data.Function (on)
 import Data.List (partition)
 import Data.Maybe (isJust, isNothing, mapMaybe)
 import qualified Data.Set as S
@@ -179,3 +177,6 @@ calculateWeekday d =
 safeMaximum :: Ord a => [a] -> Maybe a
 safeMaximum [] = Nothing
 safeMaximum xs = Just (maximum xs)
+
+equating :: Eq a => (b -> a) -> b -> b -> Bool
+equating f = (==) `on` f

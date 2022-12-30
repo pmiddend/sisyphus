@@ -13,7 +13,8 @@ import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
 import Data.Aeson hiding ((.=))
-import Data.List (partition, sortBy)
+import Data.List (partition, sortBy, sortOn)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..), comparing)
@@ -23,6 +24,7 @@ import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
 import Miso hiding (set)
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
+import RandomUtils
 import Task
 import Types
 import Prelude hiding (all)
@@ -59,7 +61,6 @@ instance ToJSON LocalStorageModel
 -- | Sum type for application events
 data Action
   = LocalStorageReceived (Either String LocalStorageModel)
-  | Nop
   | RequestRefresh
   | Init
   | ToggleAdaptAllocation
@@ -73,6 +74,7 @@ data Action
   | ToggleDone TaskId
   | ToggleRepeatingDone TaskId
   | ToggleMode
+  | ToggleLeisureMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
   | NewTaskChanged (Task () (Maybe Repeater))
@@ -109,6 +111,7 @@ initialModel =
       _today = invalidDay,
       _seed = 15,
       _displayMode = DisplayWork,
+      _leisureMode = LeisureSelected,
       _leisureProjects = mempty,
       _newLeisureProject = initialLeisureProject
     }
@@ -196,6 +199,12 @@ updateModel ToggleMode =
            DisplayWork -> DisplayLeisure
            DisplayLeisure -> DisplayWork
        )
+updateModel ToggleLeisureMode =
+  leisureMode
+    %= ( \dm -> case dm of
+           LeisureAll -> LeisureSelected
+           LeisureSelected -> LeisureAll
+       )
 updateModel (LocalStorageReceived l) =
   case l of
     Left errorMessage ->
@@ -209,7 +218,6 @@ updateModel (LocalStorageReceived l) =
 updateModel Init = do
   scheduleIO (LocalStorageReceived <$> getLocalStorage localStorageKey)
   scheduleIO (CurrentDayReceived <$> getCurrentDay)
-updateModel Nop = pure ()
 updateModel (CurrentDayReceived d) =
   case fromMisoStringEither d of
     Left _ -> do
@@ -641,12 +649,55 @@ viewModelLeisure m =
                       [viewIcon "check-lg"],
                     span_ [] [text (p ^. leisureTitle)]
                   ],
-                span_ [class_ "text-muted"] [text "test"]
+                span_ [class_ "text-muted"] [text (p ^. leisureCategory . mkLeisureCategory)]
               ]
           ]
+      viewLeisureModeSwitcher =
+        div_
+          [class_ "btn-group d-flex mb-3"]
+          [ input_
+              [ class_ "btn-check",
+                type_ "radio",
+                name_ "leisure-mode",
+                id_ "leisure-mode-selected",
+                value_ "selected",
+                checked_ ((m ^. leisureMode) == LeisureSelected),
+                onClick ToggleLeisureMode
+              ],
+            label_
+              [ for_ "leisure-mode-selected",
+                class_ "btn btn btn-outline-secondary w-100"
+              ]
+              [text "🎲 Zufällige Auswahl"],
+            input_
+              [ class_ "btn-check",
+                type_ "radio",
+                name_ "leisure-mode",
+                id_ "leisure-mode-all",
+                value_ "all",
+                checked_ ((m ^. leisureMode) == LeisureAll),
+                onClick ToggleLeisureMode
+              ],
+            label_
+              [ for_ "leisure-mode-all",
+                class_ "btn btn btn-outline-secondary w-100"
+              ]
+              ["🌍 Alle"]
+          ]
+      chosenLeisureProjects =
+        case m ^. leisureMode of
+          LeisureAll -> m ^. leisureProjects
+          LeisureSelected ->
+            let groups :: [NE.NonEmpty (LeisureProject LeisureId)]
+                groups = NE.groupBy (equating (^. leisureCategory)) (sortOn (^. leisureCategory) (m ^. leisureProjects))
+             in evalRandomM (mkStdGen (fromEnum (m ^. today))) (traverse randomListElementNE groups)
    in div_
         []
-        [h3_ [] [text "🌴 Deine Freizeitprojekte"], div_ [class_ "list-group list-group-flush"] (viewLeisureProject <$> (m ^. leisureProjects)), viewNewLeisureForm (m ^. newLeisureProject)]
+        [ h3_ [] [text "🌴 Deine Freizeitprojekte"],
+          viewLeisureModeSwitcher,
+          div_ [class_ "list-group list-group-flush"] (viewLeisureProject <$> chosenLeisureProjects),
+          viewNewLeisureForm (m ^. newLeisureProject)
+        ]
 
 viewModelWork :: Model -> View Action
 viewModelWork m =

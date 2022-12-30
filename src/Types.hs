@@ -18,7 +18,9 @@ module Types
     LeisureCategory (..),
     LeisureId (..),
     DisplayMode (..),
+    LeisureMode (..),
     Importance (..),
+    leisureMode,
     importance,
     leisureCategory,
     mkLeisureCategory,
@@ -218,6 +220,8 @@ instance ToJSON a => ToJSON (LeisureProject a)
 
 data DisplayMode = DisplayWork | DisplayLeisure deriving (Show, Eq)
 
+data LeisureMode = LeisureAll | LeisureSelected deriving (Show, Eq)
+
 type RegularTask = Task TaskId (Maybe TaskId)
 
 type RepeatingTask = Task TaskId Repeater
@@ -254,7 +258,8 @@ data Model = Model
     _seed :: Int,
     _leisureProjects :: [LeisureProject LeisureId],
     _newLeisureProject :: LeisureProject (),
-    _displayMode :: DisplayMode
+    _displayMode :: DisplayMode,
+    _leisureMode :: LeisureMode
   }
   deriving (Show, Generic, Eq)
 

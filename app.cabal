@@ -11,13 +11,13 @@ test-suite main-tests
   type: exitcode-stdio-1.0
 
   build-depends: tasty, tasty-hunit, tasty-quickcheck, base, mtl, transformers, random, miso, time, containers, aeson, lens
-  other-modules:       Simanneal, Task, Types
+  other-modules:       Simanneal, Task, Types, RandomUtils
   hs-source-dirs: src, tests
   default-language: Haskell2010
 
 executable app
   main-is:             Main.hs
-  other-modules:       Simanneal, Task, Types
+  other-modules:       Simanneal, Task, Types, RandomUtils
   hs-source-dirs: src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields
   ghcjs-options:
