@@ -75,6 +75,7 @@ data Action
   | ToggleRepeatingDone TaskId
   | ToggleMode
   | ToggleLeisureMode
+  | ToggleTaskMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
   | NewTaskChanged (Task () (Maybe Repeater))
@@ -112,6 +113,7 @@ initialModel =
       _seed = 15,
       _displayMode = DisplayWork,
       _leisureMode = LeisureSelected,
+      _taskMode = TaskModeSelected,
       _leisureProjects = mempty,
       _newLeisureProject = initialLeisureProject
     }
@@ -205,6 +207,12 @@ updateModel ToggleLeisureMode =
     %= ( \dm -> case dm of
            LeisureAll -> LeisureSelected
            LeisureSelected -> LeisureAll
+       )
+updateModel ToggleTaskMode =
+  taskMode
+    %= ( \dm -> case dm of
+           TaskModeAll -> TaskModeSelected
+           TaskModeSelected -> TaskModeAll
        )
 updateModel (LocalStorageReceived l) =
   case l of
@@ -745,15 +753,50 @@ viewModelWork m =
         case m ^. explicitAllocationChanging of
           Nothing -> viewProgressBar (m ^. today) (weekdayAllocationTime' m) (m ^. tasks)
           Just currentValue -> viewAdapterSlider m currentValue
+      viewTaskModeSwitcher =
+        div_
+          [class_ "btn-group d-flex mb-3"]
+          [ input_
+              [ class_ "btn-check",
+                type_ "radio",
+                name_ "task-mode",
+                id_ "task-mode-selected",
+                value_ "selected",
+                checked_ ((m ^. taskMode) == TaskModeSelected),
+                onClick ToggleTaskMode
+              ],
+            label_
+              [ for_ "task-mode-selected",
+                class_ "btn btn btn-outline-secondary w-100"
+              ]
+              [text "🗓 Heute"],
+            input_
+              [ class_ "btn-check",
+                type_ "radio",
+                name_ "task-mode",
+                id_ "task-mode-all",
+                value_ "all",
+                checked_ ((m ^. taskMode) == TaskModeAll),
+                onClick ToggleTaskMode
+              ],
+            label_
+              [ for_ "task-mode-all",
+                class_ "btn btn btn-outline-secondary w-100"
+              ]
+              ["🌍 Alle"]
+          ]
+      chosenTasks = case m ^. taskMode of
+        TaskModeSelected -> todayTasks
+        TaskModeAll -> uncompletedTasks
    in div_
         []
         [ progressOrAdaptation,
+          viewTaskModeSwitcher,
           div_
             [class_ "d-flex justify-content-between align-items-center"]
-            [ h5_ [] [text $ "Vorschlag (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"]
-            -- div_ [] [button_ [type_ "button", class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [i_ [class_ "bi-dice-5"] [], text $ " Neu würfeln"]]
+            [ h5_ [] [text $ "Aufgaben (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"]
             ],
-          viewTasksListGroup (m ^. today) (sortBy (comparing (Down . (^. importance)) <> comparing (^. title)) todayTasks),
+          viewTasksListGroup (m ^. today) (sortBy (comparing (Down . (^. importance)) <> comparing (^. title)) chosenTasks),
           if null remainingTasks then text "" else viewRemainingTasks,
           viewNewTaskForm m,
           viewRepeatingTasks m

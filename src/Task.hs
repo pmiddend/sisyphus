@@ -183,4 +183,5 @@ equating f = (==) `on` f
 applyN :: Int -> (a -> a) -> a -> a
 applyN n f = foldr (.) id (replicate n f)
 
+succN :: Enum a => Int -> a -> a
 succN n = applyN n succ
