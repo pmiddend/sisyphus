@@ -15,10 +15,13 @@ module Types
     TaskId (..),
     Weekday (..),
     LeisureProject (..),
+    LeisureCategory (..),
     LeisureId (..),
     DisplayMode (..),
     Importance (..),
     importance,
+    leisureCategory,
+    mkLeisureCategory,
     leisureTitle,
     leisureId,
     repeater,
@@ -192,9 +195,18 @@ increaseTaskId (TaskId i) = TaskId (i + 1)
 increaseLeisureId :: LeisureId -> LeisureId
 increaseLeisureId (LeisureId i) = LeisureId (i + 1)
 
+newtype LeisureCategory = LeisureCategory {_mkLeisureCategory :: MisoString} deriving (Eq, Show, Ord, Generic)
+
+makeLenses ''LeisureCategory
+
+instance FromJSON LeisureCategory
+
+instance ToJSON LeisureCategory
+
 data LeisureProject a = LeisureProject
   { _leisureTitle :: MisoString,
-    _leisureId :: a
+    _leisureId :: a,
+    _leisureCategory :: LeisureCategory
   }
   deriving (Show, Eq, Generic, Functor)
 

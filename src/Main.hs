@@ -3,7 +3,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
-
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
@@ -115,7 +114,7 @@ initialModel =
     }
 
 initialLeisureProject :: LeisureProject ()
-initialLeisureProject = LeisureProject {_leisureTitle = "", _leisureId = ()}
+initialLeisureProject = LeisureProject {_leisureTitle = "", _leisureId = (), _leisureCategory = LeisureCategory ""}
 
 modelToLocalStorage :: Model -> LocalStorageModel
 modelToLocalStorage Model {_tasks = tasks', _repeatingTasks = repeatingTasks', _leisureProjects = leisureProjects', _explicitAllocation = explicitAllocation'} = LocalStorageModel tasks' repeatingTasks' leisureProjects' explicitAllocation'
@@ -604,25 +603,45 @@ viewModelLeisure m =
           []
           [ h3_ [] [viewIcon "plus-lg", text " Neues Projekt"],
             div_
-              [class_ "form-floating mb-3"]
-              [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (nt ^. leisureTitle), onInput (\i -> NewLeisureProjectChanged (set leisureTitle i nt))],
-                label_ [for_ "title"] [text "Titel des Projekts"]
+              [class_ "row"]
+              [ div_
+                  [class_ "col-8"]
+                  [ div_
+                      [class_ "form-floating mb-3"]
+                      [ input_ [type_ "text", id_ "leisure-title", class_ "form-control", value_ (nt ^. leisureTitle), onInput (\i -> NewLeisureProjectChanged (set leisureTitle i nt))],
+                        label_ [for_ "leisure-title"] [text "Titel des Projekts"]
+                      ]
+                  ],
+                div_
+                  [class_ "col-4"]
+                  [ div_
+                      [class_ "form-floating mb-3"]
+                      [ input_ [type_ "text", id_ "leisure-category", class_ "form-control", value_ (nt ^. leisureCategory . mkLeisureCategory), onInput (\i -> NewLeisureProjectChanged (set (leisureCategory . mkLeisureCategory) i nt))],
+                        label_ [for_ "title"] [text "Kategorie"]
+                      ]
+                  ]
               ],
-            button_ [type_ "button", class_ "btn btn-primary w-100", onClick AddLeisureProjectClicked] [viewIcon "save", text " Hinzufügen"]
+            button_
+              [type_ "button", class_ "btn btn-primary w-100", onClick AddLeisureProjectClicked]
+              [viewIcon "save", text " Hinzufügen"]
           ]
       viewLeisureProject :: LeisureProject LeisureId -> View Action
       viewLeisureProject p =
         div_
           [class_ "list-group-item"]
           [ div_
-              [class_ "hstack gap-3"]
-              [ button_
-                  [ type_ "button",
-                    class_ "btn btn-outline-secondary btn-sm",
-                    onClick (ToggleLeisureProject (p ^. leisureId))
-                  ]
-                  [viewIcon "check-circle"],
-                span_ [] [text (p ^. leisureTitle)]
+              [class_ "d-flex justify-content-between"]
+              [ div_
+                  [class_ "hstack gap-3"]
+                  [ button_
+                      [ type_ "button",
+                        class_ "btn btn-outline-secondary btn-sm",
+                        onClick (ToggleLeisureProject (p ^. leisureId))
+                      ]
+                      [viewIcon "check-lg"],
+                    span_ [] [text (p ^. leisureTitle)]
+                  ],
+                span_ [class_ "text-muted"] [text "test"]
               ]
           ]
    in div_
