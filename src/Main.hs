@@ -456,7 +456,7 @@ viewRepeatingTasks m =
                         onClick (ToggleRepeatingDone (t ^. taskId))
                       ],
                     label_
-                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
+                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-danger"]
                       [viewIcon "trash"],
                     span_
                       [class_ "ms-3 mb-1"]
@@ -480,36 +480,37 @@ viewTasksListGroup :: Day -> [RegularTask] -> View Action
 viewTasksListGroup today' all =
   let viewTaskItem :: RegularTask -> View Action
       viewTaskItem t =
-        div_
-          [class_ "list-group-item"]
-          [ div_
-              [class_ "d-flex w-100 justify-content-between align-items-center"]
+        let isChecked = isJust (t ^. completionDay)
+         in div_
+              [class_ "list-group-item"]
               [ div_
-                  []
-                  [ input_
-                      [ type_ "checkbox",
-                        class_ "btn-check",
-                        id_ (showMiso (t ^. taskId) <> "-check"),
-                        checked_ (isJust (t ^. completionDay)),
-                        onClick (ToggleDone (t ^. taskId))
+                  [class_ "d-flex w-100 justify-content-between align-items-center"]
+                  [ div_
+                      []
+                      [ input_
+                          [ type_ "checkbox",
+                            class_ "btn-check",
+                            id_ (showMiso (t ^. taskId) <> "-check"),
+                            checked_ isChecked,
+                            onClick (ToggleDone (t ^. taskId))
+                          ],
+                        label_
+                          [for_ (showMiso (t ^. taskId) <> "-check"), class_ ("btn btn-sm btn-outline-" <> (if isChecked then "success" else "secondary"))]
+                          [viewIcon "check-lg"],
+                        span_
+                          [class_ "ms-3 mb-1"]
+                          [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
                       ],
-                    label_
-                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-secondary"]
-                      [viewIcon "check-lg"],
-                    span_
-                      [class_ "ms-3 mb-1"]
-                      [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
-                  ],
-                div_
-                  []
-                  [ maybe
-                      (text "")
-                      (\dl -> span_ [class_ "badge rounded-pill text-bg-success me-2"] [viewIcon "calendar-date", text (" " <> showDate today' dl)])
-                      (t ^. deadline),
-                    small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (t ^. timeEstimate))]
+                    div_
+                      []
+                      [ maybe
+                          (text "")
+                          (\dl -> span_ [class_ "badge rounded-pill text-bg-success me-2"] [viewIcon "calendar-date", text (" " <> showDate today' dl)])
+                          (t ^. deadline),
+                        small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (t ^. timeEstimate))]
+                      ]
                   ]
               ]
-          ]
    in div_ [class_ "list-group list-group-flush"] (viewTaskItem <$> all)
 
 buildProgressBar :: [(Int, Maybe MisoString)] -> View action
