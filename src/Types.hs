@@ -218,7 +218,7 @@ instance FromJSON a => FromJSON (LeisureProject a)
 
 instance ToJSON a => ToJSON (LeisureProject a)
 
-data DisplayMode = DisplayWork | DisplayLeisure deriving (Show, Eq)
+data DisplayMode = DisplayWork | DisplayLeisure | DisplayDebug deriving (Show, Eq)
 
 data LeisureMode = LeisureAll | LeisureSelected deriving (Show, Eq)
 

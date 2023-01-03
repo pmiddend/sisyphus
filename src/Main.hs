@@ -9,6 +9,7 @@ module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Lens (Getter, filtered, over, set, sumOf, to, traversed, use, (%=), (%~), (&), (+=), (.=), (^.))
+import Text.Pretty.Simple(pShowNoColor)
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
@@ -73,7 +74,7 @@ data Action
   | ToggleLeisureProject LeisureId
   | ToggleDone TaskId
   | ToggleRepeatingDone TaskId
-  | ToggleMode
+  | ToggleMode DisplayMode
   | ToggleLeisureMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
@@ -194,12 +195,7 @@ updateModel (ToggleLeisureProject projectId) = do
   lps <- use leisureProjects
   leisureProjects .= filter (\lp -> (lp ^. leisureId) /= projectId) lps
   setLocalStorageFromModel
-updateModel ToggleMode =
-  displayMode
-    %= ( \dm -> case dm of
-           DisplayWork -> DisplayLeisure
-           DisplayLeisure -> DisplayWork
-       )
+updateModel (ToggleMode newMode) = displayMode .= newMode
 updateModel ToggleLeisureMode =
   leisureMode
     %= ( \dm -> case dm of
@@ -586,10 +582,12 @@ viewModeSwitcher :: Model -> View Action
 viewModeSwitcher m =
   div_
     [class_ "btn-group d-flex mb-3"]
-    [ input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-work", value_ "work", checked_ ((m ^. displayMode) == DisplayWork), onClick ToggleMode],
+    [ input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-work", value_ "work", checked_ ((m ^. displayMode) == DisplayWork), onClick (ToggleMode DisplayWork)],
       label_ [for_ "display-mode-work", class_ "btn btn-lg btn-outline-secondary w-100"] [text "🏢 Arbeit"],
-      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-leisure", value_ "leisure", checked_ ((m ^. displayMode) == DisplayLeisure), onClick ToggleMode],
-      label_ [for_ "display-mode-leisure", class_ "btn btn-lg btn-outline-secondary w-100"] ["😌 Freizeit"]
+      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-leisure", value_ "leisure", checked_ ((m ^. displayMode) == DisplayLeisure), onClick (ToggleMode DisplayLeisure)],
+      label_ [for_ "display-mode-leisure", class_ "btn btn-lg btn-outline-secondary w-100"] ["😌 Freizeit"],
+      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-debug", value_ "debug", checked_ ((m ^. displayMode) == DisplayDebug), onClick (ToggleMode DisplayDebug)],
+      label_ [for_ "display-mode-debug", class_ "btn btn-lg btn-outline-secondary w-100"] ["📋 Debug"]
     ]
 
 viewModel :: Model -> View Action
@@ -597,6 +595,7 @@ viewModel m =
   let content = case m ^. displayMode of
         DisplayWork -> viewModelWork m
         DisplayLeisure -> viewModelLeisure m
+        DisplayDebug -> viewModelDebug m
 #ifndef __GHCJS__
       extraElements = [
         link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
@@ -615,6 +614,19 @@ viewModel m =
           ]
             ++ [content]
         )
+
+viewModelDebug :: Model -> View Action
+viewModelDebug m = div_ [] [
+  h3_ [] [ text "Debug info" ],
+  ol_ [] [
+      li_ [] [ text ("Today: " <> showMiso (m ^. today))  ],
+      li_ [] [ text ("Explicit Alloc: " <> showMiso (m ^. explicitAllocation))  ],
+      li_ [] [ text "Tasks: ", pre_ [] [ text (toMisoString (pShowNoColor (m ^. tasks))) ] ],
+      li_ [] [ text "Annealed IDs: ", pre_ [] [ text (toMisoString (pShowNoColor (m ^. annealedTasks))) ] ],
+      li_ [] [ text "Repeating Tasks: ", pre_ [] [ text (toMisoString (pShowNoColor (m ^. repeatingTasks))) ] ]
+      ]
+  ]
+
 
 viewModelLeisure :: Model -> View Action
 viewModelLeisure m =
