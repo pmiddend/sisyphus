@@ -592,7 +592,8 @@ viewModeSwitcher m =
             id_ ("display-mode-" <> showMiso v),
             value_ (showMiso v),
             checked_ ((m ^. displayMode) == v),
-            onClick (ToggleMode v)
+            onClick (ToggleMode v),
+            disabled_ (isJust (m ^. explicitAllocationChanging))
           ]
       createLabel v l = label_ [for_ ("display-mode-" <> showMiso v), class_ "btn btn-lg btn-outline-secondary w-100"] [text l]
    in div_
