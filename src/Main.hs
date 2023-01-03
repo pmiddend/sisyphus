@@ -9,7 +9,6 @@ module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Lens (Getter, filtered, over, set, sumOf, to, traversed, use, (%=), (%~), (&), (+=), (.=), (^.))
-import Text.Pretty.Simple(pShowNoColor)
 import Control.Monad (forever, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
@@ -27,6 +26,7 @@ import Miso hiding (set)
 import Miso.String (MisoString, fromMisoString, fromMisoStringEither, toMisoString)
 import RandomUtils
 import Task
+import Text.Pretty.Simple (pShowNoColor)
 import Types
 import Prelude hiding (all)
 #ifndef __GHCJS__
@@ -339,16 +339,19 @@ viewNewTaskForm m =
               label_ [for_ "deadline"] [text "Deadline"]
             ]
         Just (EveryNDays n) ->
-          div_ [ class_ "d-flex justify-content-between align-items-center mb-3" ] [
-              strong_ [ ] (
-                  if n == 1
-                  then [ text "jeden tag" ]
-                  else [ text "alle ", text (showMiso n), text " Tag(e)" ]
-                  ),
-              div_ [ class_ "hstack gap-3" ] [
-                button_ [ type_ "button", class_ "btn btn-primary", onClick (NewTaskChanged (set repeater (Just (EveryNDays (n-1))) nt)), disabled_ (n == 1) ] [ viewIcon "dash-lg" ],
-                button_ [ type_ "button", class_ "btn btn-primary", onClick (NewTaskChanged (set repeater (Just (EveryNDays (n+1))) nt)) ] [ viewIcon "plus-lg" ]
-              ]
+          div_
+            [class_ "d-flex justify-content-between align-items-center mb-3"]
+            [ strong_
+                []
+                ( if n == 1
+                    then [text "jeden tag"]
+                    else [text "alle ", text (showMiso n), text " Tag(e)"]
+                ),
+              div_
+                [class_ "hstack gap-3"]
+                [ button_ [type_ "button", class_ "btn btn-primary", onClick (NewTaskChanged (set repeater (Just (EveryNDays (n - 1))) nt)), disabled_ (n == 1)] [viewIcon "dash-lg"],
+                  button_ [type_ "button", class_ "btn btn-primary", onClick (NewTaskChanged (set repeater (Just (EveryNDays (n + 1))) nt))] [viewIcon "plus-lg"]
+                ]
             ]
         Just (EveryWeekday wd) ->
           div_
@@ -591,43 +594,47 @@ viewModeSwitcher m =
       label_ [for_ "display-mode-debug", class_ "btn btn-lg btn-outline-secondary w-100"] ["📋 Debug"]
     ]
 
+extraHeaderElements :: [View action]
+#ifndef __GHCJS__
+extraHeaderElements =[
+        link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
+        link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet" ]
+          ]
+#else
+extraHeaderElements = []
+#endif
+
 viewModel :: Model -> View Action
 viewModel m =
   let content = case m ^. displayMode of
         DisplayWork -> viewModelWork m
         DisplayLeisure -> viewModelLeisure m
         DisplayDebug -> viewModelDebug m
-#ifndef __GHCJS__
-      extraElements = [
-        link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css", rel_ "stylesheet"],
-        link_ [href_ "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.2/font/bootstrap-icons.css", rel_ "stylesheet" ]
-          ]
-#else
-      extraElements = []
-#endif
    in div_
         [class_ "container mt-3"]
-        ( extraElements ++
-          [ viewModeSwitcher m,
-            if (m ^. statusMessages) /= []
-              then ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))
-              else text ""
-          ]
+        ( extraHeaderElements
+            ++ [ viewModeSwitcher m,
+                 if (m ^. statusMessages) /= []
+                   then ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))
+                   else text ""
+               ]
             ++ [content]
         )
 
 viewModelDebug :: Model -> View Action
-viewModelDebug m = div_ [] [
-  h3_ [] [ text "Debug info" ],
-  ol_ [] [
-      li_ [] [ text ("Today: " <> showMiso (m ^. today))  ],
-      li_ [] [ text ("Explicit Alloc: " <> showMiso (m ^. explicitAllocation))  ],
-      li_ [] [ text "Tasks: ", pre_ [] [ text (toMisoString (pShowNoColor (m ^. tasks))) ] ],
-      li_ [] [ text "Annealed IDs: ", pre_ [] [ text (toMisoString (pShowNoColor (m ^. annealedTasks))) ] ],
-      li_ [] [ text "Repeating Tasks: ", pre_ [] [ text (toMisoString (pShowNoColor (m ^. repeatingTasks))) ] ]
-      ]
-  ]
-
+viewModelDebug m =
+  div_
+    []
+    [ h3_ [] [text "Debug info"],
+      ol_
+        []
+        [ li_ [] [text ("Today: " <> showMiso (m ^. today))],
+          li_ [] [text ("Explicit Alloc: " <> showMiso (m ^. explicitAllocation))],
+          li_ [] [text "Tasks: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. tasks)))]],
+          li_ [] [text "Annealed IDs: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. annealedTasks)))]],
+          li_ [] [text "Repeating Tasks: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. repeatingTasks)))]]
+        ]
+    ]
 
 viewModelLeisure :: Model -> View Action
 viewModelLeisure m =
@@ -785,6 +792,13 @@ runApp :: IO () -> IO ()
 runApp app = app
 #endif
 
+appMountPoint :: Maybe MisoString
+#ifndef __GHCJS__
+appMountPoint = Nothing
+#else
+appMountPoint = Just "miso-main"
+#endif
+
 main :: IO ()
 main =
   runApp $
@@ -796,11 +810,7 @@ main =
           view = viewModel,
           events = defaultEvents,
           subs = [timer],
-#ifndef __GHCJS__
-          mountPoint = Nothing,
-#else
-          mountPoint = Just "miso-main",
-#endif
+          mountPoint = appMountPoint,
           logLevel = Off
         }
   where
