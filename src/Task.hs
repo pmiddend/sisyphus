@@ -16,6 +16,7 @@ module Task
     Importance (..),
     TimeEstimate (..),
     mapRepeater,
+    daysSinceCreation,
     calculateNewId,
     applyN,
     succN,
@@ -80,6 +81,9 @@ removeRandomElement xs = do
   randomIndex <- randomRS (0, length xs - 1)
   pure (xs !! randomIndex, removeIndex randomIndex xs)
 
+daysSinceCreation :: Num a => Day -> Task idType repeaterType -> a
+daysSinceCreation today' t = abs (fromIntegral (diffDays (t ^. created) today'))
+
 annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> TimeEstimate -> [Task idType repeaterType] -> [Task idType repeaterType]
 annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
   let taskUrgency :: Getter (Task idType repeaterType) Float
@@ -91,7 +95,7 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
                 min 3.0 (max 0.0 (fromIntegral (diffDays d today')))
           )
       taskAge :: Getter (Task idType repeaterType) Float
-      taskAge = to (\t -> min 7.0 (abs (fromIntegral (diffDays (t ^. created) today'))))
+      taskAge = to (\t -> min 7.0 (daysSinceCreation today' t))
       allocated :: TimeEstimate
       allocated = max 0 (timeBudgetForToday - spentMinutes)
       totalEstimate :: TimeEstimate

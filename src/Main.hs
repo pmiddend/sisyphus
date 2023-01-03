@@ -541,12 +541,17 @@ viewTasksListGroup today' all =
                           [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
                       ],
                     div_
-                      []
+                      [class_ "hstack gap-1"]
                       [ maybe
                           (text "")
                           (\dl -> span_ [class_ "badge rounded-pill text-bg-success me-2"] [viewIcon "calendar-date", text (" " <> showDate today' dl)])
                           (t ^. deadline),
-                        small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (t ^. timeEstimate))]
+                        if daysSinceCreation today' t > (5 :: Int)
+                          then small_ [class_ "badge rounded-pill text-bg-light"] [text "👵"]
+                          else text "",
+                        small_
+                          [class_ "badge rounded-pill text-bg-info"]
+                          [text (showMiso (t ^. timeEstimate))]
                       ]
                   ]
               ]
