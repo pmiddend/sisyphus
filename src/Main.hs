@@ -35,7 +35,7 @@ import           Language.Javascript.JSaddle.Warp as JSaddle
 
 #ifndef __GHCJS__
 getCurrentDay :: JSM MisoString
-getCurrentDay = pure "2022-12-14"
+getCurrentDay = pure "2022-12-20"
 #else
 foreign import javascript unsafe "$r = new Date().toISOString().substr(0,10)"
   getCurrentDay :: JSM MisoString
@@ -460,17 +460,6 @@ importanceToIcon (Importance 0) = span_ [style_ (M.singleton "visibility" "hidde
 importanceToIcon (Importance 1) = text "❗"
 importanceToIcon (Importance _) = text "🔥"
 
--- importanceToIcon i =
---   let iconClass (Importance x)
---         | x == 0 = "reception-2"
---         | x == 1 = "reception-3"
---         | otherwise = "reception-4"
---       iconColor (Importance x)
---         | x == 0 = ""
---         | x == 1 = ""
---         | otherwise = ""
---    in i_ [class_ ("bi-" <> iconClass i <> " " <> iconColor i)] []
-
 viewIcon :: MisoString -> View action
 viewIcon desc = i_ [class_ ("bi-" <> desc)] []
 
@@ -484,28 +473,35 @@ viewRepeatingTasks m =
       viewRepeater' (EveryNDays d) = text ("alle " <> showMiso d <> " Tage")
       viewRepeatTaskItem :: RepeatingTask -> View Action
       viewRepeatTaskItem t =
-        div_
-          [class_ "list-group-item"]
-          [ div_
-              [class_ "d-flex w-100 justify-content-between align-items-center"]
-              [ div_
-                  []
-                  [ input_
-                      [ type_ "checkbox",
-                        class_ "btn-check",
-                        id_ (showMiso (t ^. taskId) <> "-check"),
-                        onClick (ToggleRepeatingDone (t ^. taskId))
-                      ],
-                    label_
-                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-danger"]
-                      [viewIcon "trash"],
-                    span_
-                      [class_ "ms-3 mb-1"]
-                      [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
+        tr_
+          []
+          [ td_
+              [class_ "align-middle"]
+              [ input_
+                  [ type_ "checkbox",
+                    class_ "btn-check",
+                    id_ (showMiso (t ^. taskId) <> "-check"),
+                    onClick (ToggleRepeatingDone (t ^. taskId))
                   ],
-                div_
+                label_
+                  [for_ (showMiso (t ^. taskId) <> "-check"), class_ "btn btn-sm btn-outline-danger"]
+                  [viewIcon "trash"]
+              ],
+            td_
+              [class_ "w-100"]
+              [ span_
+                  []
+                  [ text (" " <> (t ^. title)),
+                    br_ [],
+                    if t ^. importance /= Importance 0 then span_ [class_ "badge rounded-pill text-bg-light"] [importanceToIcon (t ^. importance)] else text ""
+                  ]
+              ],
+            td_
+              []
+              [ div_
                   [class_ "hstack gap-1"]
-                  [ viewRepeater (t ^. repeater),
+                  [ span_ [class_ "ms-auto"] [],
+                    viewRepeater (t ^. repeater),
                     small_ [class_ "badge rounded-pill text-bg-info"] [text (showMiso (t ^. timeEstimate))]
                   ]
               ]
@@ -514,7 +510,7 @@ viewRepeatingTasks m =
    in div_
         [class_ "mt-3 mb-3"]
         [ h5_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
-          div_ [class_ "list-group list-group-flush"] (viewRepeatTaskItem <$> notDoneRepeating)
+          table_ [class_ "table table-sm"] [tbody_ [] (viewRepeatTaskItem <$> notDoneRepeating)]
         ]
 
 viewTasksListGroup :: Day -> [RegularTask] -> View Action
@@ -522,42 +518,50 @@ viewTasksListGroup today' all =
   let viewTaskItem :: RegularTask -> View Action
       viewTaskItem t =
         let isChecked = isJust (t ^. completionDay)
-         in div_
-              [class_ "list-group-item"]
-              [ div_
-                  [class_ "d-flex w-100 justify-content-between align-items-center"]
-                  [ div_
-                      []
-                      [ input_
-                          [ type_ "checkbox",
-                            class_ "btn-check",
-                            id_ (showMiso (t ^. taskId) <> "-check"),
-                            checked_ isChecked,
-                            onClick (ToggleDone (t ^. taskId))
-                          ],
-                        label_
-                          [for_ (showMiso (t ^. taskId) <> "-check"), class_ ("btn btn-sm btn-outline-" <> (if isChecked then "success" else "secondary"))]
-                          [viewIcon "check-lg"],
-                        span_
-                          [class_ "ms-3 mb-1"]
-                          [importanceToIcon (t ^. importance), text (" " <> (t ^. title))]
+            importancePill = if t ^. importance /= Importance 0 then [span_ [class_ "badge rounded-pill text-bg-light"] [importanceToIcon (t ^. importance)]] else []
+            deadlinePill =
+              maybe
+                []
+                (\dl -> [span_ [class_ "badge rounded-pill text-bg-success"] [viewIcon "calendar-date", text (" " <> showDate today' dl)]])
+                (t ^. deadline)
+            oldPill =
+              if daysSinceCreation today' t > (5 :: Int)
+                then [small_ [class_ "badge rounded-pill text-bg-light"] [text "👵"]]
+                else []
+            pills = importancePill <> deadlinePill <> oldPill
+         in tr_
+              []
+              [ td_
+                  [class_ "align-middle"]
+                  [ input_
+                      [ type_ "checkbox",
+                        class_ "btn-check",
+                        id_ (showMiso (t ^. taskId) <> "-check"),
+                        checked_ isChecked,
+                        onClick (ToggleDone (t ^. taskId))
                       ],
+                    label_
+                      [for_ (showMiso (t ^. taskId) <> "-check"), class_ ("btn btn-sm btn-outline-" <> (if isChecked then "success" else "secondary"))]
+                      [viewIcon "check-lg"]
+                  ],
+                td_
+                  [class_ "w-100"]
+                  [ span_
+                      []
+                      [text (t ^. title)],
+                    if null pills then text "" else br_ [],
                     div_
                       [class_ "hstack gap-1"]
-                      [ maybe
-                          (text "")
-                          (\dl -> span_ [class_ "badge rounded-pill text-bg-success me-2"] [viewIcon "calendar-date", text (" " <> showDate today' dl)])
-                          (t ^. deadline),
-                        if daysSinceCreation today' t > (5 :: Int)
-                          then small_ [class_ "badge rounded-pill text-bg-light"] [text "👵"]
-                          else text "",
-                        small_
-                          [class_ "badge rounded-pill text-bg-info"]
-                          [text (showMiso (t ^. timeEstimate))]
-                      ]
+                      pills
+                  ],
+                td_
+                  []
+                  [ small_
+                      [class_ "badge rounded-pill text-bg-info"]
+                      [text (showMiso (t ^. timeEstimate))]
                   ]
               ]
-   in div_ [class_ "list-group list-group-flush"] (viewTaskItem <$> all)
+   in table_ [class_ "table table-sm"] [tbody_ [] (viewTaskItem <$> all)]
 
 buildProgressBar :: [(Int, Maybe MisoString)] -> View action
 buildProgressBar parts =
