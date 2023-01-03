@@ -19,10 +19,8 @@ module Types
     LeisureId (..),
     DisplayMode (..),
     LeisureMode (..),
-    TaskMode (..),
     Importance (..),
     leisureMode,
-    taskMode,
     importance,
     leisureCategory,
     mkLeisureCategory,
@@ -263,7 +261,6 @@ data Model = Model
     _leisureProjects :: [LeisureProject LeisureId],
     _newLeisureProject :: LeisureProject (),
     _displayMode :: DisplayMode,
-    _taskMode :: TaskMode,
     _leisureMode :: LeisureMode
   }
   deriving (Show, Generic, Eq)
