@@ -304,9 +304,9 @@ viewNewTaskForm m =
   let nt = m ^. newTask
       importanceToHtml :: Importance -> View action
       importanceToHtml (Importance x) = case x of
-        0 -> text "Unwichtig"
-        1 -> text "❗ Wichtig"
-        2 -> text "🔥 Superwichtig"
+        0 -> text "-"
+        1 -> text "❗"
+        2 -> text "🔥"
         _ -> text ("Wichtigkeit(" <> showMiso x <> ")")
       importances = (\i -> (importanceToHtml (Importance i), Importance i)) <$> [0, 1, 2]
       timeEstimates = [("<10min", TimeEstimate 10), ("30min", TimeEstimate 30), ("1h", TimeEstimate 60), (">1h", TimeEstimate 120)]
