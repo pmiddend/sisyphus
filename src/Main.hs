@@ -584,15 +584,26 @@ viewProgressBar today' allocated' all =
 
 viewModeSwitcher :: Model -> View Action
 viewModeSwitcher m =
-  div_
-    [class_ "btn-group d-flex mb-3"]
-    [ input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-work", value_ "work", checked_ ((m ^. displayMode) == DisplayWork), onClick (ToggleMode DisplayWork)],
-      label_ [for_ "display-mode-work", class_ "btn btn-lg btn-outline-secondary w-100"] [text "🏢 Arbeit"],
-      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-leisure", value_ "leisure", checked_ ((m ^. displayMode) == DisplayLeisure), onClick (ToggleMode DisplayLeisure)],
-      label_ [for_ "display-mode-leisure", class_ "btn btn-lg btn-outline-secondary w-100"] ["😌 Freizeit"],
-      input_ [class_ "btn-check", type_ "radio", name_ "display-mode", id_ "display-mode-debug", value_ "debug", checked_ ((m ^. displayMode) == DisplayDebug), onClick (ToggleMode DisplayDebug)],
-      label_ [for_ "display-mode-debug", class_ "btn btn-lg btn-outline-secondary w-100"] ["📋 Debug"]
-    ]
+  let createInput v =
+        input_
+          [ class_ "btn-check",
+            type_ "radio",
+            name_ "display-mode",
+            id_ ("display-mode-" <> showMiso v),
+            value_ (showMiso v),
+            checked_ ((m ^. displayMode) == v),
+            onClick (ToggleMode v)
+          ]
+      createLabel v l = label_ [for_ ("display-mode-" <> showMiso v), class_ "btn btn-lg btn-outline-secondary w-100"] [text l]
+   in div_
+        [class_ "btn-group d-flex mb-3"]
+        [ createInput DisplayWork,
+          createLabel DisplayWork "🏢 Arbeit",
+          createInput DisplayLeisure,
+          createLabel DisplayLeisure "😌 Freizeit",
+          createInput DisplayDebug,
+          createLabel DisplayDebug "📋 Debug"
+        ]
 
 extraHeaderElements :: [View action]
 #ifndef __GHCJS__
