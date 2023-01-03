@@ -9,7 +9,7 @@ module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Lens (Getter, filtered, over, set, sumOf, to, traversed, use, (%=), (%~), (&), (+=), (.=), (^.))
-import Control.Monad (forever, void)
+import Control.Monad (forever, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
 import Data.Aeson hiding ((.=))
@@ -173,6 +173,8 @@ updateModel (AdaptAllocationChange newValue) = explicitAllocationChanging .= Jus
 updateModel RequestRefresh = scheduleIO (CurrentDayReceived <$> getCurrentDay)
 updateModel ToggleNewTaskFormOpen = do
   newTaskFormOpen' <- use newTaskFormOpen
+  today' <- use today
+  when (not newTaskFormOpen') (newTask .= initialTask today')
   newTaskFormOpen .= not newTaskFormOpen'
 updateModel IncreaseSeed = do
   seed += 1
