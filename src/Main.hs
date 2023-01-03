@@ -63,6 +63,8 @@ instance ToJSON LocalStorageModel
 data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | RequestRefresh
+  | ResetDeadline
+  | UseDeadlineToday
   | ToggleNewTaskFormOpen
   | Init
   | ToggleAdaptAllocation
@@ -256,6 +258,10 @@ updateModel (ToggleRepeatingDone tid) = do
       Nothing -> Just today'
       Just _ -> Nothing
   setLocalStorageFromModel
+updateModel ResetDeadline = newTask . deadline .= Nothing
+updateModel UseDeadlineToday = do
+  today' <- use today
+  newTask . deadline .= Just today'
 updateModel AddTaskClicked = do
   tasks' <- use tasks
   rtasks' <- use repeatingTasks
@@ -346,9 +352,25 @@ viewNewTaskForm m =
       formForRepeater = case nt ^. repeater of
         Nothing ->
           div_
-            [class_ "form-floating mb-3"]
-            [ input_ [type_ "date", id_ "deadline", class_ "form-control", value_ (maybe "" showMiso (nt ^. deadline)), onInput (\i -> NewTaskChanged (set deadline (parseDay i) nt))],
-              label_ [for_ "deadline"] [text "Deadline"]
+            [class_ "input-group mb-3"]
+            [ button_
+                [ class_ "btn btn-outline-secondary",
+                  type_ "button",
+                  onClick UseDeadlineToday
+                ]
+                [text "Heute"],
+              div_
+                [class_ "form-floating"]
+                [ input_
+                    [ type_ "date",
+                      id_ "deadline",
+                      class_ "form-control",
+                      value_ (maybe "" showMiso (nt ^. deadline)),
+                      onInput (\i -> NewTaskChanged (set deadline (parseDay i) nt))
+                    ],
+                  label_ [for_ "deadline"] [text "Deadline"]
+                ],
+              button_ [class_ "btn btn-outline-secondary", type_ "button", onClick ResetDeadline] [viewIcon "slash-circle", text " Reset"]
             ]
         Just (EveryNDays n) ->
           div_
@@ -356,8 +378,8 @@ viewNewTaskForm m =
             [ strong_
                 []
                 ( if n == 1
-                    then [text "jeden tag"]
-                    else [text "alle ", text (showMiso n), text " Tag(e)"]
+                    then [text "jeden Tag"]
+                    else [text "alle ", text (showMiso n), text " Tage"]
                 ),
               div_
                 [class_ "hstack gap-3"]
@@ -419,7 +441,7 @@ viewNewTaskForm m =
                 [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked, disabled_ (m ^. newTask . title == "")]
                 [viewIcon "save", text " Hinzufügen"],
               button_
-                [type_ "button", class_ "btn btn-danger w-100", onClick ToggleNewTaskFormOpen]
+                [type_ "button", class_ "btn btn-warning w-100", onClick ToggleNewTaskFormOpen]
                 [viewIcon "slash-circle", text " Abbrechen"]
             ]
         ]
