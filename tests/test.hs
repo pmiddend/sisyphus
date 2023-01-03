@@ -35,17 +35,6 @@ defaultTask tid =
       _repeater = Nothing
     }
 
--- noDeadline importance' timeEstimate' created' tid' =
---   defaultTask {
---       importance = importance',
---       created = created',
---       deadline = Nothing,
---       timeEstimate = timeEstimate',
---       completionDay = Nothing,
---       taskId = tid',
---       repeater = Nothing
---     }
-
 main :: IO ()
 main = defaultMain tests
 
@@ -56,7 +45,7 @@ testsDailyTasks =
   let dailyTask = (defaultTask (TaskId 1)) {_repeater = EveryNDays 1, _created = yesterday}
    in testGroup
         "daily tasks"
-        [ testCase "task should be created" $ createRepeatingTasks today mempty [dailyTask] @?= [dailyTask {_repeater = Just (TaskId 1)}],
+        [ testCase "task should be created" $ createRepeatingTasks today mempty [dailyTask] @?= [dailyTask {_repeater = Just (TaskId 1), _taskId = (TaskId 2)}],
           testCase "task shouldn't be recreated if not done yet" $
             let todaysTasks = createRepeatingTasks today mempty [dailyTask]
              in createRepeatingTasks (toEnum 1) todaysTasks [dailyTask]
@@ -85,7 +74,7 @@ testEveryNDayTasks =
               firstCreationDay
               mempty
               [everyDays]
-              @?= [everyDays {_repeater = Just (TaskId 1)}],
+              @?= [everyDays {_repeater = Just (TaskId 1), _taskId = TaskId 2}],
           testCase "should not create task twice" $
             let todaysTasks = createRepeatingTasks firstCreationDay mempty [everyDays]
              in createRepeatingTasks (succ firstCreationDay) todaysTasks [everyDays] @?= [],

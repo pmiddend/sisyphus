@@ -35,7 +35,7 @@ import           Language.Javascript.JSaddle.Warp as JSaddle
 
 #ifndef __GHCJS__
 getCurrentDay :: JSM MisoString
-getCurrentDay = pure "2022-12-13"
+getCurrentDay = pure "2022-12-14"
 #else
 foreign import javascript unsafe "$r = new Date().toISOString().substr(0,10)"
   getCurrentDay :: JSM MisoString
@@ -210,7 +210,11 @@ updateModel (LocalStorageReceived l) =
       leisureProjects .= lsLeisureProjects v
       repeatingTasks .= lsRepeatingTasks v
       explicitAllocation .= lsExplicitAllocation v
-      tasks .= lsTasks v
+      let repeatingTaskIds = (^. taskId) <$> (lsRepeatingTasks v)
+      -- This is a little "migration" for the data model. Previously, due to a bug, we created regular tasks from
+      -- repeating tasks by assigning the same ID to the new task as the repeated task, instead of generating a
+      -- new one. Here, we delete those tasks from the model.
+      tasks .= (filter (\t -> (t ^. taskId) `notElem` (repeatingTaskIds)) (lsTasks v))
       reanneal
 updateModel Init = do
   scheduleIO (LocalStorageReceived <$> getLocalStorage localStorageKey)
@@ -251,10 +255,7 @@ updateModel AddTaskClicked = do
   tasks' <- use tasks
   rtasks' <- use repeatingTasks
   newTask' <- use newTask
-  let maxId :: TaskId
-      maxId = fromMaybe (TaskId 0) (safeMaximum (((^. taskId) <$> tasks') <> ((^. taskId) <$> rtasks')))
-      newTaskWithId :: Task TaskId (Maybe Repeater)
-      newTaskWithId = const (increaseTaskId maxId) `mapTaskId` newTask'
+  let newTaskWithId = const (calculateNewId tasks' rtasks') `mapTaskId` newTask'
   today' <- use today
   case newTask' ^. repeater of
     Nothing ->

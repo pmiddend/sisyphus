@@ -16,6 +16,7 @@ module Task
     Importance (..),
     TimeEstimate (..),
     mapRepeater,
+    calculateNewId,
     applyN,
     succN,
     calculateWeekday,
@@ -35,7 +36,9 @@ module Task
   )
 where
 
-import Control.Lens (Getter, folded, from, sumOf, to, traversed, view, (^.))
+import Control.Lens (Getter, folded, from, sumOf, to, traversed, view, (&), (.~), (^.))
+import Control.Monad (join)
+import Control.Monad.State.Strict (State, evalState, get, put)
 import Data.Function (on)
 import Data.List (partition)
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
@@ -139,28 +142,38 @@ goBackUntilWeekdayMatches repeatOn lastClosing =
     else goBackUntilWeekdayMatches repeatOn (pred lastClosing)
 
 createRepeatingTasks :: Day -> [RegularTask] -> [RepeatingTask] -> [RegularTask]
-createRepeatingTasks today' regularTasks = concatMap possiblyRepeat
+createRepeatingTasks today' regularTasks' repeatingTasks' = evalState (createRepeatingTasks' today' regularTasks' repeatingTasks') (calculateNewId regularTasks' repeatingTasks')
+
+concatMapM :: (Monad t, Traversable t, Applicative m) => (a -> m (t b)) -> t a -> m (t b)
+concatMapM f t = join <$> traverse f t
+
+createRepeatingTasks' :: Day -> [RegularTask] -> [RepeatingTask] -> State TaskId [RegularTask]
+createRepeatingTasks' today' regularTasks' repeatingTasks' = concatMapM possiblyRepeat repeatingTasks'
   where
-    createTask rt = [const (Just (rt ^. taskId)) `mapRepeater` rt]
-    possiblyRepeat :: RepeatingTask -> [RegularTask]
+    createTask :: RepeatingTask -> State TaskId [RegularTask]
+    createTask rt = do
+      newId <- get
+      put (increaseTaskId newId)
+      pure [rt & repeater .~ (Just (rt ^. taskId)) & taskId .~ newId]
+    possiblyRepeat :: RepeatingTask -> State TaskId [RegularTask]
     possiblyRepeat rt
-      | isJust (rt ^. completionDay) = []
+      | isJust (rt ^. completionDay) = pure []
       | otherwise =
-        let hasOpenCandidate = any (\t -> (t ^. repeater) == Just (rt ^. taskId) && isNothing (t ^. completionDay)) regularTasks
+        let hasOpenCandidate = any (\t -> (t ^. repeater) == Just (rt ^. taskId) && isNothing (t ^. completionDay)) regularTasks'
          in if hasOpenCandidate
-              then []
+              then pure []
               else
-                let lc = fromMaybe (rt ^. created) (safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks))
+                let lc = fromMaybe (rt ^. created) (safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks'))
                  in case rt ^. repeater of
                       EveryNDays n ->
                         if diffDays today' lc >= fromIntegral n
                           then createTask rt
-                          else []
+                          else pure []
                       EveryWeekday repeatOn ->
                         let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
                          in if diffDays previousToBeClosed today' >= 7
                               then createTask rt
-                              else []
+                              else pure []
 
 calculateWeekday :: Day -> Weekday
 calculateWeekday d =
@@ -192,3 +205,7 @@ readIntegral s =
   case reads s of
     (i, _) : _ -> Just $ fromInteger i
     [] -> Nothing
+
+calculateNewId :: [RegularTask] -> [RepeatingTask] -> TaskId
+calculateNewId tasks' rtasks' =
+  increaseTaskId (fromMaybe (TaskId 0) (safeMaximum (((^. taskId) <$> tasks') <> ((^. taskId) <$> rtasks'))))
