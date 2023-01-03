@@ -19,6 +19,8 @@ import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..), comparing)
 import qualified Data.Set as S
+import Data.Text (Text, break, splitOn)
+import qualified Data.Text as T
 import Data.Time.Calendar (Day, diffDays)
 import Data.Time.Format (defaultTimeLocale, parseTimeM)
 import GHC.Generics (Generic)
@@ -28,7 +30,7 @@ import RandomUtils
 import Task
 import Text.Pretty.Simple (pShowNoColor)
 import Types
-import Prelude hiding (all)
+import Prelude hiding (all, break)
 #ifndef __GHCJS__
 import           Language.Javascript.JSaddle.Warp as JSaddle
 #endif
@@ -463,6 +465,27 @@ importanceToIcon (Importance _) = text "🔥"
 viewIcon :: MisoString -> View action
 viewIcon desc = i_ [class_ ("bi-" <> desc)] []
 
+uncons :: [a] -> Maybe (a, [a])
+uncons [] = Nothing
+uncons (x : xs) = Just (x, xs)
+
+viewTitle :: MisoString -> [View action]
+viewTitle s =
+  let extractLink :: Text -> (Text, Text)
+      extractLink = break (== ' ')
+      linkTitle :: Text -> Text
+      linkTitle lt
+        | "youtube.com" `T.isInfixOf` lt = "YouTube"
+        | otherwise = T.take 30 lt
+      makeLink :: (Text, Text) -> [View action]
+      makeLink (l, rest) =
+        [ span_ [] [a_ [href_ (toMisoString ("https://" <> l))] [text (linkTitle l)]],
+          span_ [] [text (toMisoString rest)]
+        ]
+   in case uncons (splitOn "https://" (fromMisoString s)) of
+        Nothing -> []
+        Just (h, t) -> text h : (concatMap makeLink (extractLink <$> t))
+
 viewRepeatingTasks :: Model -> View Action
 viewRepeatingTasks m =
   let viewRepeater :: Repeater -> View action
@@ -491,10 +514,13 @@ viewRepeatingTasks m =
               [class_ "w-100"]
               [ span_
                   []
-                  [ text (" " <> (t ^. title)),
-                    br_ [],
-                    if t ^. importance /= Importance 0 then span_ [class_ "badge rounded-pill text-bg-light"] [importanceToIcon (t ^. importance)] else text ""
-                  ]
+                  ( viewTitle (t ^. title)
+                      <> [ br_ [],
+                           if t ^. importance /= Importance 0
+                             then span_ [class_ "badge rounded-pill text-bg-light"] [importanceToIcon (t ^. importance)]
+                             else text ""
+                         ]
+                  )
               ],
             td_
               []
@@ -546,14 +572,13 @@ viewTasksListGroup today' all =
                   ],
                 td_
                   [class_ "w-100"]
-                  [ span_
-                      []
-                      [text (t ^. title)],
-                    if null pills then text "" else br_ [],
-                    div_
-                      [class_ "hstack gap-1"]
-                      pills
-                  ],
+                  ( viewTitle (t ^. title)
+                      <> [ if null pills then text "" else br_ [],
+                           div_
+                             [class_ "hstack gap-1"]
+                             pills
+                         ]
+                  ),
                 td_
                   []
                   [ small_
