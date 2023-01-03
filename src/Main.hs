@@ -296,7 +296,13 @@ updateModel AddLeisureProjectClicked =
 viewNewTaskForm :: Model -> View Action
 viewNewTaskForm m =
   let nt = m ^. newTask
-      importances = (\i -> (showMiso (Importance i), Importance i)) <$> [0, 1, 2]
+      importanceToHtml :: Importance -> View action
+      importanceToHtml (Importance x) = case x of
+        0 -> text "Unwichtig"
+        1 -> text "❗ Wichtig"
+        2 -> text "🔥 Superwichtig"
+        _ -> text ("Wichtigkeit(" <> showMiso x <> ")")
+      importances = (\i -> (importanceToHtml (Importance i), Importance i)) <$> [0, 1, 2]
       timeEstimates = [("<10min", TimeEstimate 10), ("30min", TimeEstimate 30), ("1h", TimeEstimate 60), (">1h", TimeEstimate 120)]
       makeWeekdayRadio :: Weekday -> Weekday -> [View Action]
       makeWeekdayRadio curWd wd =
@@ -311,18 +317,18 @@ viewNewTaskForm m =
             ],
           label_ [for_ ("repeat-wd-" <> showMiso wd), class_ "btn btn-outline-primary w-100"] [text (showMiso wd)]
         ]
-      makeImportanceRadio :: (MisoString, Importance) -> [View Action]
+      makeImportanceRadio :: (View Action, Importance) -> [View Action]
       makeImportanceRadio (displayText, value) =
         [ input_
             [ class_ "btn-check",
               type_ "radio",
               name_ "importance",
-              id_ displayText,
-              value_ displayText,
+              id_ (showMiso value),
+              value_ (showMiso value),
               checked_ ((nt ^. importance) == value),
               onClick (NewTaskChanged (set importance value nt))
             ],
-          label_ [for_ displayText, class_ "btn btn-outline-primary w-100"] [text displayText]
+          label_ [for_ (showMiso value), class_ "btn btn-outline-primary w-100"] [displayText]
         ]
       makeTimeEstimateRadio :: (MisoString, TimeEstimate) -> [View Action]
       makeTimeEstimateRadio (displayValue, value) =
@@ -382,7 +388,7 @@ viewNewTaskForm m =
           div_
             [class_ "btn-group mb-3 d-flex"]
             [ input_ [class_ "btn-check", type_ "radio", name_ "repeater", id_ "has-deadline", value_ "has-deadline", checked_ (isNothing (nt ^. repeater)), onClick (NewTaskChanged (set repeater Nothing nt))],
-              label_ [for_ "has-deadline", class_ "btn btn-outline-secondary w-100"] [text "Nicht wiederholend"],
+              label_ [for_ "has-deadline", class_ "btn btn-outline-secondary w-100"] [text "Einmalig"],
               input_
                 [ class_ "btn-check",
                   type_ "radio",
@@ -404,7 +410,7 @@ viewNewTaskForm m =
                   checked_ (maybe False isEveryWeekday (nt ^. repeater)),
                   onClick (NewTaskChanged (set repeater (Just (EveryWeekday Monday)) nt))
                 ],
-              label_ [for_ "every-weekday", class_ "btn btn-outline-secondary w-100"] [text "Bestimmter Wochentag"]
+              label_ [for_ "every-weekday", class_ "btn btn-outline-secondary w-100"] [text "Wochentag"]
             ],
           formForRepeater,
           div_
