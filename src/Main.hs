@@ -63,6 +63,7 @@ instance ToJSON LocalStorageModel
 data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | RequestRefresh
+  | ToggleNewTaskFormOpen
   | Init
   | ToggleAdaptAllocation
   | CancelAdaptAllocation
@@ -102,6 +103,7 @@ initialModel :: Model
 initialModel =
   Model
     { _newTask = initialTask invalidDay,
+      _newTaskFormOpen = False,
       _tasks = mempty,
       _repeatingTasks = mempty,
       _annealedTasks = mempty,
@@ -167,6 +169,9 @@ reanneal = do
 updateModel :: Action -> Transition Action Model ()
 updateModel (AdaptAllocationChange newValue) = explicitAllocationChanging .= Just newValue
 updateModel RequestRefresh = scheduleIO (CurrentDayReceived <$> getCurrentDay)
+updateModel ToggleNewTaskFormOpen = do
+  newTaskFormOpen' <- use newTaskFormOpen
+  newTaskFormOpen .= not newTaskFormOpen'
 updateModel IncreaseSeed = do
   seed += 1
   tasks' <- use tasks
@@ -255,6 +260,7 @@ updateModel AddTaskClicked = do
   tasks' <- use tasks
   rtasks' <- use repeatingTasks
   newTask' <- use newTask
+  newTaskFormOpen .= False
   let newTaskWithId = const (calculateNewId tasks' rtasks') `mapTaskId` newTask'
   today' <- use today
   case newTask' ^. repeater of
@@ -363,8 +369,7 @@ viewNewTaskForm m =
             ]
    in form_
         [class_ "mb-3 mt-3"]
-        [ h3_ [] [viewIcon "plus-lg", text " Neue Aufgabe"],
-          div_
+        [ div_
             [class_ "form-floating mb-3"]
             [ input_ [type_ "text", id_ "title", class_ "form-control", value_ (nt ^. title), onInput (\i -> NewTaskChanged (set title i nt))],
               label_ [for_ "title"] [text "Titel der Aufgabe"]
@@ -402,9 +407,15 @@ viewNewTaskForm m =
               label_ [for_ "every-weekday", class_ "btn btn-outline-secondary w-100"] [text "Bestimmter Wochentag"]
             ],
           formForRepeater,
-          button_
-            [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked, disabled_ (m ^. newTask . title == "")]
-            [viewIcon "save", text " Hinzufügen"]
+          div_
+            [class_ "hstack gap-3"]
+            [ button_
+                [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked, disabled_ (m ^. newTask . title == "")]
+                [viewIcon "save", text " Hinzufügen"],
+              button_
+                [type_ "button", class_ "btn btn-danger w-100", onClick ToggleNewTaskFormOpen]
+                [viewIcon "slash-circle", text " Abbrechen"]
+            ]
         ]
 
 showDate :: Day -> Day -> MisoString
@@ -472,7 +483,7 @@ viewRepeatingTasks m =
       notDoneRepeating = filter (isNothing . (^. completionDay)) (m ^. repeatingTasks)
    in div_
         [class_ "mt-3 mb-3"]
-        [ h3_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
+        [ h5_ [] [viewIcon "arrow-clockwise", text " Wiederkehrende Aufgaben"],
           div_ [class_ "list-group list-group-flush"] (viewRepeatTaskItem <$> notDoneRepeating)
         ]
 
@@ -578,7 +589,7 @@ viewProgressBar today' allocated' all =
                   (overhang, Just "bg-danger"),
                   (leftover, Nothing)
                 ],
-              button_ [type_ "button", class_ "btn btn-primary btn-sm", onClick ToggleAdaptAllocation] [text "Anpassen"]
+              button_ [type_ "button", class_ "btn btn-outline-primary btn-sm", onClick ToggleAdaptAllocation] [text "Anpassen"]
             ],
           description
         ]
@@ -784,16 +795,27 @@ viewModelWork m =
         case m ^. explicitAllocationChanging of
           Nothing -> viewProgressBar (m ^. today) (weekdayAllocationTime' m) (m ^. tasks)
           Just currentValue -> viewAdapterSlider m currentValue
+      viewToggleNewTaskFormButton =
+        div_
+          [class_ "mt-3"]
+          [ button_
+              [ class_ "btn btn-outline-primary w-100",
+                type_ "button",
+                onClick ToggleNewTaskFormOpen
+              ]
+              [viewIcon "plus", text " Neue Aufgabe"]
+          ]
    in div_
         []
         [ progressOrAdaptation,
           div_
             [class_ "d-flex justify-content-between align-items-center"]
-            [ h5_ [] [text $ "Aufgaben (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"]
+            [ h5_ [] [viewIcon "check-all", text $ " Aufgaben (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"]
             ],
           viewTasksListGroup (m ^. today) (sortBy (comparing (Down . (^. importance)) <> comparing (^. title)) todayTasks),
           if null remainingTasks then text "" else viewRemainingTasks,
-          viewNewTaskForm m,
+          if m ^. newTaskFormOpen then text "" else viewToggleNewTaskFormButton,
+          if m ^. newTaskFormOpen then viewNewTaskForm m else text "",
           viewRepeatingTasks m
         ]
 

@@ -21,6 +21,7 @@ module Types
     LeisureMode (..),
     Importance (..),
     leisureMode,
+    newTaskFormOpen,
     importance,
     leisureCategory,
     mkLeisureCategory,
@@ -249,6 +250,7 @@ instance ToJSON ExplicitAllocation
 
 data Model = Model
   { _newTask :: Task () (Maybe Repeater),
+    _newTaskFormOpen :: Bool,
     _tasks :: [RegularTask],
     _repeatingTasks :: [RepeatingTask],
     _explicitAllocation :: Maybe ExplicitAllocation,
