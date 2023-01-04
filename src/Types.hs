@@ -249,7 +249,7 @@ instance FromJSON ExplicitAllocation
 instance ToJSON ExplicitAllocation
 
 data Model = Model
-  { _newTask :: Task () (Maybe Repeater),
+  { _newTask :: Task (Maybe TaskId) (Maybe Repeater),
     _newTaskFormOpen :: Bool,
     _tasks :: [RegularTask],
     _repeatingTasks :: [RepeatingTask],

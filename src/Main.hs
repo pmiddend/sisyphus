@@ -8,12 +8,12 @@
 module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Lens (Getter, filtered, over, set, sumOf, to, traversed, use, (%=), (%~), (&), (+=), (.=), (^.))
+import Control.Lens (Getter, filtered, over, set, sumOf, to, traversed, use, (%=), (%~), (&), (+=), (.=), (.~), (^.))
 import Control.Monad (forever, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (get)
 import Data.Aeson hiding ((.=))
-import Data.List (partition, sortBy, sortOn)
+import Data.List (find, partition, sortBy, sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
@@ -65,6 +65,7 @@ instance ToJSON LocalStorageModel
 data Action
   = LocalStorageReceived (Either String LocalStorageModel)
   | RequestRefresh
+  | StartEditTask TaskId
   | ResetDeadline
   | UseDeadlineToday
   | ToggleNewTaskFormOpen
@@ -75,6 +76,7 @@ data Action
   | ToggleRemainingTasksOpened
   | IncreaseSeed
   | AddTaskClicked
+  | DeleteTaskClicked TaskId
   | AddLeisureProjectClicked
   | ToggleLeisureProject LeisureId
   | ToggleDone TaskId
@@ -83,11 +85,11 @@ data Action
   | ToggleLeisureMode
   | LocalStorageUpdated
   | CurrentDayReceived MisoString
-  | NewTaskChanged (Task () (Maybe Repeater))
+  | NewTaskChanged (Task (Maybe TaskId) (Maybe Repeater))
   | NewLeisureProjectChanged (LeisureProject ())
   deriving (Show, Eq)
 
-initialTask :: Day -> Task () (Maybe Repeater)
+initialTask :: Day -> Task (Maybe TaskId) (Maybe Repeater)
 initialTask today' =
   Task
     { _title = "",
@@ -96,7 +98,7 @@ initialTask today' =
       _deadline = Nothing,
       _timeEstimate = TimeEstimate 10,
       _completionDay = Nothing,
-      _taskId = (),
+      _taskId = Nothing,
       _repeater = Nothing
     }
 
@@ -171,6 +173,22 @@ reanneal = do
 
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Transition Action Model ()
+updateModel (DeleteTaskClicked tid) = do
+  tasks' <- use tasks
+  tasks .= filter (\t -> (t ^. taskId) /= tid) tasks'
+  newTaskFormOpen .= False
+  setLocalStorageFromModel
+updateModel (StartEditTask tid) = do
+  tasks' <- use tasks
+  case find (\t -> (t ^. taskId) == tid) tasks' of
+    Nothing -> pure ()
+    Just t' ->
+      if isJust (t' ^. repeater)
+        then pure ()
+        else do
+          scheduleIO_ (scrollIntoView "my-divider")
+          newTask .= (t' & taskId .~ Just tid & repeater .~ Nothing)
+          newTaskFormOpen .= True
 updateModel (AdaptAllocationChange newValue) = explicitAllocationChanging .= Just newValue
 updateModel RequestRefresh = scheduleIO (CurrentDayReceived <$> getCurrentDay)
 updateModel ToggleNewTaskFormOpen = do
@@ -271,23 +289,33 @@ updateModel AddTaskClicked = do
   rtasks' <- use repeatingTasks
   newTask' <- use newTask
   newTaskFormOpen .= False
-  let newTaskWithId = const (calculateNewId tasks' rtasks') `mapTaskId` newTask'
-  today' <- use today
-  case newTask' ^. repeater of
-    Nothing ->
-      let newNonrepeatingTask :: RegularTask
-          newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
-          newTasks = newNonrepeatingTask : tasks'
-       in do
-            newTask .= initialTask today'
-            tasks .= newTasks
-    Just repeating -> do
-      rts <- use repeatingTasks
-      let newRepeatingTask :: RepeatingTask
-          newRepeatingTask = const repeating `mapRepeater` newTaskWithId
-          newRepeatingTasks = newRepeatingTask : rts
-      newTask .= initialTask today'
-      repeatingTasks .= newRepeatingTasks
+  case newTask' ^. taskId of
+    Just tid -> do
+      -- Is this replaceable with a traversal?
+      let mapTask t =
+            if (t ^. taskId) == tid
+              then newTask' & taskId .~ tid & repeater .~ Nothing
+              else t
+          newTasks = mapTask <$> tasks'
+      tasks .= newTasks
+    Nothing -> do
+      let newTaskWithId = const (calculateNewId tasks' rtasks') `mapTaskId` newTask'
+      today' <- use today
+      case newTask' ^. repeater of
+        Nothing ->
+          let newNonrepeatingTask :: RegularTask
+              newNonrepeatingTask = const Nothing `mapRepeater` newTaskWithId
+              newTasks = newNonrepeatingTask : tasks'
+           in do
+                newTask .= initialTask today'
+                tasks .= newTasks
+        Just repeating -> do
+          rts <- use repeatingTasks
+          let newRepeatingTask :: RepeatingTask
+              newRepeatingTask = const repeating `mapRepeater` newTaskWithId
+              newRepeatingTasks = newRepeatingTask : rts
+          newTask .= initialTask today'
+          repeatingTasks .= newRepeatingTasks
   reanneal
   setLocalStorageFromModel
 updateModel AddLeisureProjectClicked =
@@ -443,7 +471,10 @@ viewNewTaskForm m =
             [class_ "hstack gap-3"]
             [ button_
                 [type_ "button", class_ "btn btn-primary w-100", onClick AddTaskClicked, disabled_ (m ^. newTask . title == "")]
-                [viewIcon "save", text " Hinzufügen"],
+                [viewIcon "save", text (if isJust (m ^. newTask . taskId) then " Bearbeiten" else " Hinzufügen")],
+              case m ^. newTask . taskId of
+                Nothing -> text ""
+                Just tid -> button_ [type_ "button", class_ "btn btn-danger w-100", onClick (DeleteTaskClicked tid)] [viewIcon "trash", text " Löschen"],
               button_
                 [type_ "button", class_ "btn btn-warning w-100", onClick ToggleNewTaskFormOpen]
                 [viewIcon "slash-circle", text " Abbrechen"]
@@ -554,9 +585,13 @@ viewTasksListGroup today' all =
               if daysSinceCreation today' t > (5 :: Int)
                 then [small_ [class_ "badge rounded-pill text-bg-light"] [text "👵"]]
                 else []
-            pills = importancePill <> deadlinePill <> oldPill
+            repeatPill =
+              if isJust (t ^. repeater)
+                then [small_ [class_ "badge rounded-pill text-bg-light"] [text "🔄"]]
+                else []
+            pills = importancePill <> deadlinePill <> oldPill <> repeatPill
          in tr_
-              []
+              [onClick (StartEditTask (t ^. taskId))]
               [ td_
                   [class_ "align-middle"]
                   [ input_
@@ -586,7 +621,7 @@ viewTasksListGroup today' all =
                       [text (showMiso (t ^. timeEstimate))]
                   ]
               ]
-   in table_ [class_ "table table-sm"] [tbody_ [] (viewTaskItem <$> all)]
+   in table_ [class_ "table table-sm table-hover"] [tbody_ [] (viewTaskItem <$> all)]
 
 buildProgressBar :: [(Int, Maybe MisoString)] -> View action
 buildProgressBar parts =
@@ -878,6 +913,7 @@ viewModelWork m =
             ],
           viewTasksListGroup (m ^. today) (sortBy (comparing (Down . (^. importance)) <> comparing (^. title)) todayTasks),
           if null remainingTasks then text "" else viewRemainingTasks,
+          hr_ [id_ "my-divider"],
           if m ^. newTaskFormOpen then text "" else viewToggleNewTaskFormButton,
           if m ^. newTaskFormOpen then viewNewTaskForm m else text "",
           viewRepeatingTasks m
