@@ -21,7 +21,7 @@ executable app
   hs-source-dirs: src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields
   ghcjs-options:
-    -dedupe
+    -dedupe -DGHCJS_GC_INTERVAL=5000
   build-depends:       base, miso, aeson, time, containers, random, mtl, transformers, lens, pretty-simple, text
   if !impl(ghcjs)
     build-depends:
