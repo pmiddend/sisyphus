@@ -266,19 +266,20 @@ updateModel (NewTaskChanged nt) = newTask .= nt
 updateModel (NewLeisureProjectChanged lp) = newLeisureProject .= lp
 updateModel (ToggleDone tid) = do
   today' <- use today
-  updateTask tid $
-    over
+  updateTask tid
+    $ over
       completionDay
-      $ \cd -> case cd of
-        Nothing -> Just today'
-        Just _ -> Nothing
+    $ \cd -> case cd of
+      Nothing -> Just today'
+      Just _ -> Nothing
   setLocalStorageFromModel
 updateModel (ToggleRepeatingDone tid) = do
   today' <- use today
   updateRepeatingTask tid $ \t ->
-    t & completionDay %~ \cd -> case cd of
-      Nothing -> Just today'
-      Just _ -> Nothing
+    t
+      & completionDay %~ \cd -> case cd of
+        Nothing -> Just today'
+        Just _ -> Nothing
   setLocalStorageFromModel
 updateModel ResetDeadline = newTask . deadline .= Nothing
 updateModel UseDeadlineToday = do
@@ -510,12 +511,12 @@ viewTitle s =
         | otherwise = T.take 30 lt
       makeLink :: (Text, Text) -> [View action]
       makeLink (l, rest) =
-        [ span_ [] [a_ [href_ (toMisoString ("https://" <> l))] [text (linkTitle l)]],
+        [ span_ [] [a_ [href_ (toMisoString ("https://" <> l))] [text (toMisoString (linkTitle l))]],
           span_ [] [text (toMisoString rest)]
         ]
    in case uncons (splitOn "https://" (fromMisoString s)) of
         Nothing -> []
-        Just (h, t) -> text h : (concatMap makeLink (extractLink <$> t))
+        Just (h, t) -> text (toMisoString h) : (concatMap makeLink (extractLink <$> t))
 
 viewRepeatingTasks :: Model -> View Action
 viewRepeatingTasks m =
