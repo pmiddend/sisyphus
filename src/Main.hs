@@ -592,7 +592,7 @@ viewTasksListGroup today' all =
                 else []
             pills = importancePill <> deadlinePill <> oldPill <> repeatPill
          in tr_
-              [onClick (StartEditTask (t ^. taskId))]
+              []
               [ td_
                   [class_ "align-middle"]
                   [ input_
@@ -607,7 +607,7 @@ viewTasksListGroup today' all =
                       [viewIcon "check-lg"]
                   ],
                 td_
-                  [class_ "w-100"]
+                  [class_ "w-100", onClick (StartEditTask (t ^. taskId))]
                   ( viewTitle (t ^. title)
                       <> [ if null pills then text "" else br_ [],
                            div_
