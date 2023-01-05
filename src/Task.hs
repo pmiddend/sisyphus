@@ -52,7 +52,7 @@ import Types
 import Prelude hiding (all)
 
 taskEstimateSum :: [Task idType repeaterType] -> TimeEstimate
---taskEstimateSum ts = TimeEstimate (sum (estimateInMinutes . timeEstimate <$> ts))
+-- taskEstimateSum ts = TimeEstimate (sum (estimateInMinutes . timeEstimate <$> ts))
 taskEstimateSum = sumOf (folded . timeEstimate)
 
 annealTasksInModel :: forall idType repeaterType. Ord idType => Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> S.Set idType
@@ -158,26 +158,26 @@ createRepeatingTasks' today' regularTasks' repeatingTasks' = concatMapM possibly
     createTask rt = do
       newId <- get
       put (increaseTaskId newId)
-      pure [rt & repeater .~ (Just (rt ^. taskId)) & taskId .~ newId]
+      pure [rt & repeater .~ (Just (rt ^. taskId)) & taskId .~ newId & created .~ today']
     possiblyRepeat :: RepeatingTask -> State TaskId [RegularTask]
     possiblyRepeat rt
       | isJust (rt ^. completionDay) = pure []
       | otherwise =
-        let hasOpenCandidate = any (\t -> (t ^. repeater) == Just (rt ^. taskId) && isNothing (t ^. completionDay)) regularTasks'
-         in if hasOpenCandidate
-              then pure []
-              else
-                let lc = fromMaybe (rt ^. created) (safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks'))
-                 in case rt ^. repeater of
-                      EveryNDays n ->
-                        if diffDays today' lc >= fromIntegral n
-                          then createTask rt
-                          else pure []
-                      EveryWeekday repeatOn ->
-                        let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
-                         in if diffDays previousToBeClosed today' >= 7
-                              then createTask rt
-                              else pure []
+          let hasOpenCandidate = any (\t -> (t ^. repeater) == Just (rt ^. taskId) && isNothing (t ^. completionDay)) regularTasks'
+           in if hasOpenCandidate
+                then pure []
+                else
+                  let lc = fromMaybe (rt ^. created) (safeMaximum (mapMaybe (\t -> if t ^. repeater == Just (rt ^. taskId) then t ^. completionDay else Nothing) regularTasks'))
+                   in case rt ^. repeater of
+                        EveryNDays n ->
+                          if diffDays today' lc >= fromIntegral n
+                            then createTask rt
+                            else pure []
+                        EveryWeekday repeatOn ->
+                          let previousToBeClosed = goBackUntilWeekdayMatches repeatOn lc
+                           in if diffDays previousToBeClosed today' >= 7
+                                then createTask rt
+                                else pure []
 
 calculateWeekday :: Day -> Weekday
 calculateWeekday d =
