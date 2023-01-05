@@ -258,9 +258,14 @@ updateModel (CurrentDayReceived d) =
         sms <- use statusMessages
         statusMessages .= toMisoString ("couldn't parse \"" <> ddecoded <> "\"") : sms
       Just todayParsed -> do
-        today .= todayParsed
-        newTask . created .= todayParsed
-        reanneal
+        today' <- use today
+        if today' /= todayParsed
+          then do
+            today .= todayParsed
+            newTask . created .= todayParsed
+            seed .= fromEnum todayParsed
+            reanneal
+          else pure ()
 updateModel LocalStorageUpdated = pure ()
 updateModel (NewTaskChanged nt) = newTask .= nt
 updateModel (NewLeisureProjectChanged lp) = newLeisureProject .= lp
