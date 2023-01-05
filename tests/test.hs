@@ -2,6 +2,7 @@
 
 import qualified Data.Set as S
 import Data.Time.Calendar (Day)
+import Debug.Trace (traceShowId)
 import Simanneal
 import Task
 import Test.Tasty
@@ -114,35 +115,52 @@ testsAnnealing =
           @?= 8,
       testCase
         "should prioritize importance"
-        $ assertBool "important should be in it" $
-          S.member
-            (TaskId 7)
-            ( annealTasksInModel
-                baseSeed
-                today
-                (TimeEstimate 30)
-                [ defaultTask (TaskId 1),
-                  defaultTask (TaskId 2),
-                  defaultTask (TaskId 3),
-                  defaultTask (TaskId 4),
-                  defaultTask (TaskId 5),
-                  defaultTask (TaskId 6),
-                  (defaultTask (TaskId 7)) {_importance = important},
-                  defaultTask (TaskId 8),
-                  defaultTask (TaskId 9)
-                ]
-            ),
+        $ assertBool "important should be in it"
+        $ S.member
+          (TaskId 7)
+          ( annealTasksInModel
+              baseSeed
+              today
+              (TimeEstimate 30)
+              [ defaultTask (TaskId 1),
+                defaultTask (TaskId 2),
+                defaultTask (TaskId 3),
+                defaultTask (TaskId 4),
+                defaultTask (TaskId 5),
+                defaultTask (TaskId 6),
+                (defaultTask (TaskId 7)) {_importance = important},
+                defaultTask (TaskId 8),
+                defaultTask (TaskId 9)
+              ]
+          ),
       testCase
         "should prioritize old tasks"
-        $ assertBool "old should be in it" $
-          S.member
-            (TaskId 11)
-            ( annealTasksInModel
-                baseSeed
-                today
-                (TimeEstimate 30)
-                (((defaultTask . TaskId) <$> [1 .. 10]) <> [(defaultTask (TaskId 11)) {_created = pred (pred (pred today))}])
-            )
+        $ assertBool "old should be in it"
+        $ S.member
+          (TaskId 11)
+          ( annealTasksInModel
+              baseSeed
+              today
+              (TimeEstimate 30)
+              (((defaultTask . TaskId) <$> [1 .. 10]) <> [(defaultTask (TaskId 11)) {_created = pred (pred (pred today))}])
+          ),
+      let visionBoard = (defaultTask (TaskId 5)) {_title = "vision board", _importance = Importance 2, _timeEstimate = TimeEstimate 120, _created = (predN 5 today)}
+          vitamins = (defaultTask (TaskId 6)) {_title = "vitamins", _importance = Importance 2, _timeEstimate = TimeEstimate 10, _created = (predN 5 today)}
+          arend = (defaultTask (TaskId 7)) {_title = "arend", _importance = Importance 1, _timeEstimate = TimeEstimate 60, _created = (predN 3 today)}
+          cupboard = (defaultTask (TaskId 8)) {_title = "cupboard", _importance = Importance 1, _timeEstimate = TimeEstimate 60}
+          christmasdeco = (defaultTask (TaskId 9)) {_title = "christmasdeco", _importance = Importance 1, _timeEstimate = TimeEstimate 60, _created = (predN 5 today)}
+       in testCase
+            "should take care of longest duration"
+            $ S.size
+              ( traceShowId
+                  ( annealTasksInModel
+                      18
+                      today
+                      (TimeEstimate 80)
+                      ([visionBoard, vitamins, arend, cupboard, christmasdeco])
+                  )
+              )
+              @?= 1
     ]
 
 testsRepeatingTasks :: TestTree

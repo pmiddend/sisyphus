@@ -20,6 +20,7 @@ module Task
     calculateNewId,
     applyN,
     succN,
+    predN,
     calculateWeekday,
     createRepeatingTasks,
     safeMaximum,
@@ -63,8 +64,7 @@ annealTasksInModel seed' today' timeBudgetForToday tasks' =
           seed'
           today'
           timeBudgetForToday
-          (taskEstimateSum (filter (\t -> (t ^. completionDay) == Just today') tasks'))
-          (filter (isNothing . view completionDay) tasks')
+          (filter (\t -> isNothing (t ^. completionDay) || (t ^. completionDay) == Just today') tasks')
     )
 
 estimateInMinutes :: TimeEstimate -> Int
@@ -84,8 +84,8 @@ removeRandomElement xs = do
 daysSinceCreation :: Num a => Day -> Task idType repeaterType -> a
 daysSinceCreation today' t = abs (fromIntegral (diffDays (t ^. created) today'))
 
-annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> TimeEstimate -> [Task idType repeaterType] -> [Task idType repeaterType]
-annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
+annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> [Task idType repeaterType]
+annealTasks seed' today' allocated allTasks =
   let taskUrgency :: Getter (Task idType repeaterType) Float
       taskUrgency =
         to
@@ -96,14 +96,12 @@ annealTasks seed' today' timeBudgetForToday spentMinutes allTasks =
           )
       taskAge :: Getter (Task idType repeaterType) Float
       taskAge = to (\t -> min 7.0 (daysSinceCreation today' t))
-      allocated :: TimeEstimate
-      allocated = max 0 (timeBudgetForToday - spentMinutes)
       totalEstimate :: TimeEstimate
       totalEstimate = taskEstimateSum allTasks
       maxDistanceToAllocated :: TimeEstimate
-      maxDistanceToAllocated = max allocated totalEstimate
+      maxDistanceToAllocated = max allocated (max 0 (totalEstimate - allocated))
       distance x y = abs (x - y)
-      (baseTasks, remainingTasks) = partition (\t -> maybe False (<= today') (t ^. deadline)) allTasks
+      (baseTasks, remainingTasks) = partition (\t -> maybe False (<= today') (t ^. deadline) || (t ^. completionDay) == Just today') allTasks
       taskEnergy :: Task idType repeaterType -> Energy
       taskEnergy t =
         ((t ^. importance . numericImportance . to fromIntegral . from energyFloat) ^* 0.05)
@@ -203,6 +201,9 @@ applyN n f = foldr (.) id (replicate n f)
 
 succN :: Enum a => Int -> a -> a
 succN n = applyN n succ
+
+predN :: Enum a => Int -> a -> a
+predN n = applyN n pred
 
 readIntegral :: Num a => String -> Maybe a
 readIntegral s =
