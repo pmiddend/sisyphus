@@ -13,7 +13,7 @@ import System.Random (Random, StdGen, mkStdGen, randomR)
 
 newtype Temperature = Temperature Float deriving (Fractional, Num, Eq, Ord)
 
-newtype Energy = Energy Float deriving (Num, Ord, Eq)
+newtype Energy = Energy Float deriving (Num, Ord, Eq, Show)
 
 scaleEnergy :: Energy -> Float -> Energy
 scaleEnergy (Energy g) x = Energy (g * x)

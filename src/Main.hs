@@ -169,7 +169,9 @@ reanneal = do
   let newTasks = tasks' <> createRepeatingTasks today' tasks' repeatingTasks'
   tasks .= newTasks
   allocationTime' <- weekdayAllocationTime
-  annealedTasks .= annealTasksInModel seed' today' allocationTime' newTasks
+  let (annealedMetadata, annealedTasks') = annealTasksInModel seed' today' allocationTime' newTasks
+  annealedTasks .= annealedTasks'
+  statusMessages .= [showMiso annealedMetadata]
 
 -- | Updates model, optionally introduces side effects
 updateModel :: Action -> Transition Action Model ()
@@ -198,11 +200,7 @@ updateModel ToggleNewTaskFormOpen = do
   newTaskFormOpen .= not newTaskFormOpen'
 updateModel IncreaseSeed = do
   seed += 1
-  tasks' <- use tasks
-  today' <- use today
-  seed' <- use seed
-  weekdayAllocation' <- weekdayAllocationTime
-  annealedTasks .= annealTasksInModel seed' today' weekdayAllocation' tasks'
+  reanneal
 updateModel CancelAdaptAllocation = explicitAllocationChanging .= Nothing
 updateModel ToggleAdaptAllocation = do
   explicitAllocChanging' <- use explicitAllocationChanging
@@ -742,11 +740,7 @@ viewModel m =
    in div_
         [class_ "container mt-3"]
         ( extraHeaderElements
-            ++ [ viewModeSwitcher m,
-                 if (m ^. statusMessages) /= []
-                   then ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))
-                   else text ""
-               ]
+            ++ [viewModeSwitcher m]
             ++ [content]
         )
 
@@ -759,6 +753,7 @@ viewModelDebug m =
         []
         [ li_ [] [text ("Today: " <> showMiso (m ^. today))],
           li_ [] [text ("Explicit Alloc: " <> showMiso (m ^. explicitAllocation))],
+          li_ [] [text "Status messages:", ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))],
           li_ [] [text "Tasks: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. tasks)))]],
           li_ [] [text "Annealed IDs: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. annealedTasks)))]],
           li_ [] [text "Repeating Tasks: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. repeatingTasks)))]]
@@ -915,7 +910,8 @@ viewModelWork m =
         [ progressOrAdaptation,
           div_
             [class_ "d-flex justify-content-between align-items-center"]
-            [ h5_ [] [viewIcon "check-all", text $ " Aufgaben (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"]
+            [ h5_ [] [viewIcon "check-all", text $ " Aufgaben (" <> showMiso (sumOf (traversed . timeEstimate) todayTasks) <> ")"],
+              button_ [class_ "btn btn-sm btn-outline-secondary", onClick IncreaseSeed] [text "🎲"]
             ],
           viewTasksListGroup (m ^. today) (sortBy (comparing (Down . (^. importance)) <> comparing (^. title)) todayTasks),
           if null remainingTasks then text "" else viewRemainingTasks,

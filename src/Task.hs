@@ -56,16 +56,15 @@ taskEstimateSum :: [Task idType repeaterType] -> TimeEstimate
 -- taskEstimateSum ts = TimeEstimate (sum (estimateInMinutes . timeEstimate <$> ts))
 taskEstimateSum = sumOf (folded . timeEstimate)
 
-annealTasksInModel :: forall idType repeaterType. Ord idType => Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> S.Set idType
+annealTasksInModel :: forall idType repeaterType. Ord idType => Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> (AnnealMetadata, S.Set idType)
 annealTasksInModel seed' today' timeBudgetForToday tasks' =
-  S.fromList
-    ( view taskId
-        <$> annealTasks
+  let (resultingEnergy, resultingTasks) =
+        annealTasks
           seed'
           today'
           timeBudgetForToday
           (filter (\t -> isNothing (t ^. completionDay) || (t ^. completionDay) == Just today') tasks')
-    )
+   in (resultingEnergy, S.fromList (view taskId <$> resultingTasks))
 
 estimateInMinutes :: TimeEstimate -> Int
 estimateInMinutes (TimeEstimate e) = e
@@ -84,7 +83,17 @@ removeRandomElement xs = do
 daysSinceCreation :: Num a => Day -> Task idType repeaterType -> a
 daysSinceCreation today' t = abs (fromIntegral (diffDays (t ^. created) today'))
 
-annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> [Task idType repeaterType]
+data AnnealMetadata = AnnealMetadata
+  { _annealFinalEnergy :: Energy,
+    _annealMaxDistanceToAllocated :: TimeEstimate,
+    _annealDistanceMeasure :: Energy,
+    _annealEnergyMeasure :: Energy
+  }
+
+instance Show AnnealMetadata where
+  show (AnnealMetadata fe mdta d e) = "energy: " <> show fe <> ", mdta: " <> show mdta <> ", d: " <> show d <> ", e: " <> show e
+
+annealTasks :: forall idType repeaterType. Seed -> Day -> TimeEstimate -> [Task idType repeaterType] -> (AnnealMetadata, [Task idType repeaterType])
 annealTasks seed' today' allocated allTasks =
   let taskUrgency :: Getter (Task idType repeaterType) Float
       taskUrgency =
@@ -107,11 +116,10 @@ annealTasks seed' today' allocated allTasks =
         ((t ^. importance . numericImportance . to fromIntegral . from energyFloat) ^* 0.05)
           + ((t ^. taskUrgency . from energyFloat) ^* 0.05)
           + ((t ^. taskAge . from energyFloat) ^* 0.01)
+      distanceFromMax ts = Energy (fromIntegral (distance allocated (taskEstimateSum ts)) / fromIntegral maxDistanceToAllocated)
       taskGroupEnergy :: ([Task idType repeaterType], [Task idType repeaterType]) -> Energy
       taskGroupEnergy (ts, _) =
-        let closeToAllocated :: Energy
-            closeToAllocated = Energy (fromIntegral (distance allocated (taskEstimateSum (ts <> baseTasks))) / fromIntegral maxDistanceToAllocated)
-         in closeToAllocated - sumOf (traversed . to taskEnergy) ts
+        distanceFromMax (ts <> baseTasks) - sumOf (traversed . to taskEnergy) ts
       mutateTasks :: ([Task idType repeaterType], [Task idType repeaterType]) -> SimannealState ([Task idType repeaterType], [Task idType repeaterType]) ([Task idType repeaterType], [Task idType repeaterType])
       mutateTasks (chosenTasks, openTasks) = do
         removeOrAdd :: Int <- randomRS (1, 100)
@@ -127,10 +135,13 @@ annealTasks seed' today' allocated allTasks =
                 pure (removedTask : chosenTasks, newOpenTasks)
               else pure (chosenTasks, openTasks)
    in if length allTasks <= 1 || null remainingTasks
-        then allTasks
+        then (AnnealMetadata (taskGroupEnergy (allTasks, [])) 0 0 0, allTasks)
         else
           let solution = simanneal seed' (remainingTasks, []) mutateTasks taskGroupEnergy 100.0 0.01 0.5
-           in (baseTasks <> fst solution)
+              finalTasks = baseTasks <> fst solution
+              distanceMeasure = distanceFromMax finalTasks
+              energyMeasure = sumOf (traversed . to taskEnergy) finalTasks
+           in (AnnealMetadata (taskGroupEnergy (finalTasks, [])) maxDistanceToAllocated distanceMeasure energyMeasure, finalTasks)
 
 weekdayToAllocationTime :: Weekday -> TimeEstimate
 weekdayToAllocationTime Saturday = TimeEstimate 180
