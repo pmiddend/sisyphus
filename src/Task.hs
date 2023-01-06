@@ -113,9 +113,9 @@ annealTasks seed' today' allocated allTasks =
       (baseTasks, remainingTasks) = partition (\t -> maybe False (<= today') (t ^. deadline) || (t ^. completionDay) == Just today') allTasks
       taskEnergy :: Task idType repeaterType -> Energy
       taskEnergy t =
-        ((t ^. importance . numericImportance . to fromIntegral . from energyFloat) ^* 0.05)
-          + ((t ^. taskUrgency . from energyFloat) ^* 0.05)
-          + ((t ^. taskAge . from energyFloat) ^* 0.01)
+        ((t ^. importance . numericImportance . to fromIntegral . from energyFloat) ^* 0.0125)
+          + ((t ^. taskUrgency . from energyFloat) ^* 0.0125)
+          + ((t ^. taskAge . from energyFloat) ^* 0.001)
       distanceFromMax ts = Energy (fromIntegral (distance allocated (taskEstimateSum ts)) / fromIntegral maxDistanceToAllocated)
       taskGroupEnergy :: ([Task idType repeaterType], [Task idType repeaterType]) -> Energy
       taskGroupEnergy (ts, _) =
