@@ -50,7 +50,7 @@ localStorageKey :: MisoString
 localStorageKey = "v7"
 
 gitCommit :: MisoString
-gitCommit = "fb0d2c3"
+gitCommit = "6a3daeefb0d2c3"
 
 data LocalStorageModel = LocalStorageModel
   { lsTasks :: [Task TaskId (Maybe TaskId)],
@@ -589,7 +589,7 @@ viewTasksListGroup today' all =
                 (\dl -> [span_ [class_ "badge rounded-pill text-bg-success"] [viewIcon "calendar-date", text (" " <> showDate today' dl)]])
                 (t ^. deadline)
             oldPill =
-              if daysSinceCreation today' t > (5 :: Int)
+              if daysSinceCreation today' t > (14 :: Int)
                 then [small_ [class_ "badge rounded-pill text-bg-light"] [text "👵"]]
                 else []
             repeatPill =
