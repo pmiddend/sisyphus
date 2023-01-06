@@ -49,6 +49,9 @@ weekday = today . to calculateWeekday
 localStorageKey :: MisoString
 localStorageKey = "v7"
 
+gitCommit :: MisoString
+gitCommit = "fb0d2c3"
+
 data LocalStorageModel = LocalStorageModel
   { lsTasks :: [Task TaskId (Maybe TaskId)],
     lsRepeatingTasks :: [Task TaskId Repeater],
@@ -752,6 +755,7 @@ viewModelDebug m =
       ol_
         []
         [ li_ [] [text ("Today: " <> showMiso (m ^. today))],
+          li_ [] [text ("Git commit: " <> gitCommit)],
           li_ [] [text ("Explicit Alloc: " <> showMiso (m ^. explicitAllocation))],
           li_ [] [text "Status messages:", ol_ [] ((\sm -> li_ [] [text sm]) <$> (m ^. statusMessages))],
           li_ [] [text "Tasks: ", pre_ [] [text (toMisoString (pShowNoColor (m ^. tasks)))]],
